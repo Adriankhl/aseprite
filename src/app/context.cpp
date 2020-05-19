@@ -1,5 +1,5 @@
 // Aseprite
-// Copyright (C) 2018-2019  Igara Studio S.A.
+// Copyright (C) 2018-2020  Igara Studio S.A.
 // Copyright (C) 2001-2018  David Capello
 //
 // This program is distributed under the terms of
@@ -17,6 +17,7 @@
 #include "app/commands/commands.h"
 #include "app/console.h"
 #include "app/doc.h"
+#include "app/pref/preferences.h"
 #include "app/site.h"
 #include "base/scoped_value.h"
 #include "doc/layer.h"
@@ -30,13 +31,26 @@ namespace app {
 Context::Context()
   : m_docs(this)
   , m_lastSelectedDoc(nullptr)
+  , m_preferences(nullptr)
 {
   m_docs.add_observer(this);
 }
 
 Context::~Context()
 {
+  if (m_preferences)
+    m_docs.remove_observer(m_preferences.get());
+
   m_docs.remove_observer(this);
+}
+
+Preferences& Context::preferences() const
+{
+  if (!m_preferences) {
+    m_preferences.reset(new Preferences);
+    m_docs.add_observer(m_preferences.get());
+  }
+  return *m_preferences;
 }
 
 void Context::sendDocumentToTop(Doc* document)
@@ -78,6 +92,11 @@ void Context::setActiveLayer(doc::Layer* layer)
 void Context::setActiveFrame(const doc::frame_t frame)
 {
   onSetActiveFrame(frame);
+}
+
+void Context::setRange(const DocRange& range)
+{
+  onSetRange(range);
 }
 
 void Context::setSelectedColors(const doc::PalettePicks& picks)
@@ -219,6 +238,12 @@ void Context::onSetActiveFrame(const doc::frame_t frame)
 {
   if (m_lastSelectedDoc)
     activeSiteHandler()->setActiveFrameInDoc(m_lastSelectedDoc, frame);
+}
+
+void Context::onSetRange(const DocRange& range)
+{
+  if (m_lastSelectedDoc)
+    activeSiteHandler()->setRangeInDoc(m_lastSelectedDoc, range);
 }
 
 void Context::onSetSelectedColors(const doc::PalettePicks& picks)

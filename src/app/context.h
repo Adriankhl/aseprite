@@ -1,5 +1,5 @@
 // Aseprite
-// Copyright (C) 2018-2019  Igara Studio S.A.
+// Copyright (C) 2018-2020  Igara Studio S.A.
 // Copyright (C) 2001-2018  David Capello
 //
 // This program is distributed under the terms of
@@ -32,7 +32,9 @@ namespace app {
   class ActiveSiteHandler;
   class Command;
   class Doc;
+  class DocRange;
   class DocView;
+  class Preferences;
 
   class CommandPreconditionException : public base::Exception {
   public:
@@ -69,6 +71,8 @@ namespace app {
     const Docs& documents() const { return m_docs; }
     Docs& documents() { return m_docs; }
 
+    Preferences& preferences() const;
+
     virtual bool isUIAvailable() const     { return false; }
     virtual bool isRecordingMacro() const  { return false; }
     virtual bool isExecutingMacro() const  { return false; }
@@ -85,6 +89,7 @@ namespace app {
     void setActiveDocument(Doc* document);
     void setActiveLayer(doc::Layer* layer);
     void setActiveFrame(doc::frame_t frame);
+    void setRange(const DocRange& range);
     void setSelectedColors(const doc::PalettePicks& picks);
     bool hasModifiedDocuments() const;
     void notifyActiveSiteChanged();
@@ -108,6 +113,7 @@ namespace app {
     virtual void onSetActiveDocument(Doc* doc);
     virtual void onSetActiveLayer(doc::Layer* layer);
     virtual void onSetActiveFrame(const doc::frame_t frame);
+    virtual void onSetRange(const DocRange& range);
     virtual void onSetSelectedColors(const doc::PalettePicks& picks);
     virtual void onCloseDocument(Doc* doc);
 
@@ -116,10 +122,11 @@ namespace app {
   private:
     ActiveSiteHandler* activeSiteHandler() const;
 
-    Docs m_docs;
+    mutable Docs m_docs;
     ContextFlags m_flags;       // Last updated flags.
     Doc* m_lastSelectedDoc;
     mutable std::unique_ptr<ActiveSiteHandler> m_activeSiteHandler;
+    mutable std::unique_ptr<Preferences> m_preferences;
 
     DISABLE_COPYING(Context);
   };

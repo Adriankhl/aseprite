@@ -1,5 +1,5 @@
 // Aseprite
-// Copyright (C) 2018-2019  Igara Studio S.A.
+// Copyright (C) 2018-2020  Igara Studio S.A.
 // Copyright (C) 2001-2018  David Capello
 //
 // This program is distributed under the terms of
@@ -371,7 +371,7 @@ bool DocView::onProcessMessage(Message* msg)
 void DocView::onGeneralUpdate(DocEvent& ev)
 {
   if (m_editor->isVisible())
-    m_editor->updateEditor();
+    m_editor->updateEditor(true);
 }
 
 void DocView::onSpritePixelsModified(DocEvent& ev)
@@ -391,29 +391,6 @@ void DocView::onAddLayer(DocEvent& ev)
   if (current_editor == m_editor) {
     ASSERT(ev.layer() != NULL);
     m_editor->setLayer(ev.layer());
-  }
-}
-
-void DocView::onBeforeRemoveLayer(DocEvent& ev)
-{
-  Sprite* sprite = ev.sprite();
-  Layer* layer = ev.layer();
-
-  // If the layer that was removed is the selected one
-  if (layer == m_editor->layer()) {
-    LayerGroup* parent = layer->parent();
-    Layer* layer_select = NULL;
-
-    // Select previous layer, or next layer, or the parent (if it is
-    // not the main layer of sprite set).
-    if (layer->getPrevious())
-      layer_select = layer->getPrevious();
-    else if (layer->getNext())
-      layer_select = layer->getNext();
-    else if (parent != sprite->root())
-      layer_select = parent;
-
-    m_editor->setLayer(layer_select);
   }
 }
 

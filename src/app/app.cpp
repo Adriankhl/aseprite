@@ -1,5 +1,5 @@
 // Aseprite
-// Copyright (C) 2018-2019  Igara Studio S.A.
+// Copyright (C) 2018-2020  Igara Studio S.A.
 // Copyright (C) 2001-2018  David Capello
 //
 // This program is distributed under the terms of
@@ -67,6 +67,7 @@
 #include "render/render.h"
 #include "ui/intern.h"
 #include "ui/ui.h"
+#include "ver/info.h"
 
 #include <iostream>
 #include <memory>
@@ -103,8 +104,14 @@ private:
 
 class App::CoreModules {
 public:
+#ifdef ENABLE_UI
+  typedef app::UIContext ContextT;
+#else
+  typedef app::Context ContextT;
+#endif
+
   ConfigModule m_configModule;
-  Preferences m_preferences;
+  ContextT m_context;
 };
 
 class App::LoadLanguage {
@@ -117,12 +124,6 @@ public:
 
 class App::Modules {
 public:
-#ifdef ENABLE_UI
-  typedef app::UIContext ContextT;
-#else
-  typedef app::Context ContextT;
-#endif
-
   LoggerModule m_loggerModule;
   FileSystemModule m_file_system_module;
   Extensions m_extensions;
@@ -131,7 +132,6 @@ public:
   tools::ToolBox m_toolbox;
   tools::ActiveToolManager m_activeToolManager;
   Commands m_commands;
-  ContextT m_context;
 #ifdef ENABLE_UI
   RecentFiles m_recent_files;
   InputChain m_inputChain;
@@ -161,9 +161,9 @@ public:
     return m_recovery;
   }
 
-  void createDataRecovery() {
+  void createDataRecovery(Context* ctx) {
 #ifdef ENABLE_DATA_RECOVERY
-    m_recovery = new app::crash::DataRecovery(&m_context);
+    m_recovery = new app::crash::DataRecovery(ctx);
     m_recovery->SessionsListIsReady.connect(
       [] {
         ui::assert_ui_thread();
@@ -217,6 +217,8 @@ App::App(AppMod* mod)
 
 int App::initialize(const AppOptions& options)
 {
+  os::System* system = os::instance();
+
 #ifdef ENABLE_UI
   m_isGui = options.startUI() && !options.previewCLI();
 #else
@@ -228,12 +230,13 @@ int App::initialize(const AppOptions& options)
 #ifdef _WIN32
   if (options.disableWintab() ||
       !preferences().experimental.loadWintabDriver()) {
-    os::instance()->useWintabAPI(false);
+    system->useWintabAPI(false);
   }
 #endif
 
-  os::instance()->setAppMode(m_isGui ? os::AppMode::GUI:
-                                       os::AppMode::CLI);
+  system->setAppName(get_app_name());
+  system->setAppMode(m_isGui ? os::AppMode::GUI:
+                               os::AppMode::CLI);
 
   if (m_isGui)
     m_uiSystem.reset(new ui::UISystem);
@@ -252,7 +255,7 @@ int App::initialize(const AppOptions& options)
       break;
   }
 
-  initialize_color_spaces();
+  initialize_color_spaces(preferences());
 
   // Load modules
   m_modules = new Modules(createLogInDesktop, preferences());
@@ -263,7 +266,7 @@ int App::initialize(const AppOptions& options)
 
   // Data recovery is enabled only in GUI mode
   if (isGui() && preferences().general.dataRecovery())
-    m_modules->createDataRecovery();
+    m_modules->createDataRecovery(context());
 
   if (isPortable())
     LOG("APP: Running in portable mode\n");
@@ -309,6 +312,12 @@ int App::initialize(const AppOptions& options)
   }
 #endif  // ENABLE_UI
 
+#ifdef ENABLE_SCRIPTING
+  // Call the init() function from all plugins
+  LOG("APP: Initializing scripts...\n");
+  extensions().executeInitActions();
+#endif
+
   // Process options
   LOG("APP: Processing options...\n");
   {
@@ -319,12 +328,12 @@ int App::initialize(const AppOptions& options)
       delegate.reset(new DefaultCliDelegate);
 
     CliProcessor cli(delegate.get(), options);
-    int code = cli.process(&m_modules->m_context);
+    int code = cli.process(context());
     if (code != 0)
       return code;
   }
 
-  os::instance()->finishLaunching();
+  system->finishLaunching();
   return 0;
 }
 
@@ -337,7 +346,7 @@ void App::run()
     // How to interpret one finger on Windows tablets.
     ui::Manager::getDefault()->getDisplay()
       ->setInterpretOneFingerGestureAsMouseMovement(
-        Preferences::instance().experimental.oneFingerAsMouseMovement());
+        preferences().experimental.oneFingerAsMouseMovement());
 #endif
 
 #if !defined(_WIN32) && !defined(__APPLE__)
@@ -395,7 +404,7 @@ void App::run()
     // we've to print errors).
     Console console;
 #ifdef ENABLE_SCRIPTING
-    // Use the app::Console() for script erros
+    // Use the app::Console() for script errors
     ConsoleEngineDelegate delegate;
     script::ScopedEngineDelegate setEngineDelegate(m_engine.get(), &delegate);
 #endif
@@ -414,10 +423,17 @@ void App::run()
   }
 #endif  // ENABLE_SCRIPTING
 
+  // ----------------------------------------------------------------------
+
+#ifdef ENABLE_SCRIPTING
+  // Call the exit() function from all plugins
+  extensions().executeExitActions();
+#endif
+
 #ifdef ENABLE_UI
   if (isGui()) {
     // Select no document
-    m_modules->m_context.setActiveView(nullptr);
+    static_cast<UIContext*>(context())->setActiveView(nullptr);
 
     // Delete backups (this is a normal shutdown, we are not handling
     // exceptions, and we are not in a destructor).
@@ -428,10 +444,10 @@ void App::run()
   // Destroy all documents from the UIContext.
   std::vector<Doc*> docs;
 #ifdef ENABLE_UI
-  for (Doc* doc : m_modules->m_context.getAndRemoveAllClosedDocs())
+  for (Doc* doc : static_cast<UIContext*>(context())->getAndRemoveAllClosedDocs())
     docs.push_back(doc);
 #endif
-  for (Doc* doc : m_modules->m_context.documents())
+  for (Doc* doc : context()->documents())
     docs.push_back(doc);
   for (Doc* doc : docs) {
     // First we close the document. In this way we receive recent
@@ -496,7 +512,7 @@ App::~App()
     // the scripts have a reproducible behavior. Those reset
     // preferences must not be saved.
     if (isGui())
-      m_coreModules->m_preferences.save();
+      preferences().save();
 
     delete m_coreModules;
 
@@ -515,7 +531,7 @@ App::~App()
     // no re-throw
   }
   catch (...) {
-    os::error_message("Error closing " PACKAGE ".\n(uncaught exception)");
+    os::error_message("Error closing the program.\n(uncaught exception)");
 
     // no re-throw
   }
@@ -523,7 +539,7 @@ App::~App()
 
 Context* App::context()
 {
-  return &m_modules->m_context;
+  return &m_coreModules->m_context;
 }
 
 bool App::isPortable()
@@ -591,7 +607,7 @@ Timeline* App::timeline() const
 
 Preferences& App::preferences() const
 {
-  return m_coreModules->m_preferences;
+  return m_coreModules->m_context.preferences();
 }
 
 Extensions& App::extensions() const
@@ -607,7 +623,8 @@ crash::DataRecovery* App::dataRecovery() const
 #ifdef ENABLE_UI
 void App::showNotification(INotificationDelegate* del)
 {
-  m_mainWindow->showNotification(del);
+  if (m_mainWindow)
+    m_mainWindow->showNotification(del);
 }
 
 void App::showBackupNotification(bool state)
@@ -626,7 +643,7 @@ void App::showBackupNotification(bool state)
 
 void App::updateDisplayTitleBar()
 {
-  std::string defaultTitle = PACKAGE " v" VERSION;
+  std::string defaultTitle = fmt::format("{} v{}", get_app_name(), get_app_version());
   std::string title;
 
   DocView* docView = UIContext::instance()->activeView();
@@ -637,7 +654,7 @@ void App::updateDisplayTitleBar()
   }
 
   title += defaultTitle;
-  os::instance()->defaultDisplay()->setTitleBar(title);
+  os::instance()->defaultDisplay()->setTitle(title);
 }
 
 InputChain& App::inputChain()
@@ -708,20 +725,6 @@ int app_get_color_to_clear_layer(Layer* layer)
     color = app::Color::fromMask();
 
   return color_utils::color_for_layer(color, layer);
-}
-
-std::string memory_dump_filename()
-{
-#ifdef _WIN32
-  static const char* kDefaultCrashName = PACKAGE "-crash-" VERSION ".dmp";
-
-  app::ResourceFinder rf;
-  rf.includeUserDir(kDefaultCrashName);
-  return rf.getFirstOrCreateDefault();
-
-#else
-  return "";
-#endif
 }
 
 } // namespace app

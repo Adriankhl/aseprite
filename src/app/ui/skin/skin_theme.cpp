@@ -1,5 +1,5 @@
 // Aseprite
-// Copyright (C) 2019  Igara Studio S.A.
+// Copyright (C) 2019-2020  Igara Studio S.A.
 // Copyright (C) 2001-2018  David Capello
 //
 // This program is distributed under the terms of
@@ -26,6 +26,7 @@
 #include "app/xml_document.h"
 #include "app/xml_exception.h"
 #include "base/bind.h"
+#include "base/clamp.h"
 #include "base/fs.h"
 #include "base/log.h"
 #include "base/string.h"
@@ -42,6 +43,7 @@
 
 #include "tinyxml.h"
 
+#include <algorithm>
 #include <cstring>
 
 #define BGCOLOR                 (getWidgetBgColor(widget))
@@ -113,7 +115,7 @@ static FontData* load_font(std::map<std::string, FontData*>& fonts,
   if (type == "spritesheet") {
     const char* fileStr = xmlFont->Attribute("file");
     if (fileStr) {
-      font.reset(new FontData(os::FontType::kSpriteSheet));
+      font.reset(new FontData(os::FontType::SpriteSheet));
       font->setFilename(base::join_path(xmlDir, fileStr));
     }
   }
@@ -143,7 +145,7 @@ static FontData* load_font(std::map<std::string, FontData*>& fonts,
     // The filename can be empty if the font was not found, anyway we
     // want to keep the font information (e.g. to use the fallback
     // information of this font).
-    font.reset(new FontData(os::FontType::kTrueType));
+    font.reset(new FontData(os::FontType::FreeType));
     font->setFilename(fontFilename);
     font->setAntialias(antialias);
 
@@ -934,7 +936,7 @@ int SkinTheme::getScrollbarSize()
 
 gfx::Size SkinTheme::getEntryCaretSize(Widget* widget)
 {
-  if (widget->font()->type() == os::FontType::kTrueType)
+  if (widget->font()->type() == os::FontType::FreeType)
     return gfx::Size(2*guiscale(), widget->textHeight());
   else
     return gfx::Size(2*guiscale(), widget->textHeight()+2*guiscale());
@@ -986,7 +988,8 @@ public:
   void preProcessChar(const int index,
                       const int codepoint,
                       gfx::Color& fg,
-                      gfx::Color& bg) override {
+                      gfx::Color& bg,
+                      const gfx::Rect& charBounds) override {
     // Normal text
     auto& colors = SkinTheme::instance()->colors;
     bg = ColorNone;
@@ -1076,7 +1079,7 @@ void SkinTheme::drawEntryText(ui::Graphics* g, ui::Entry* widget)
   const std::string& textString = widget->text();
   base::utf8_const_iterator utf8_it((textString.begin()));
   int textlen = base::utf8_length(textString);
-  scroll = MIN(scroll, textlen);
+  scroll = std::min(scroll, textlen);
   if (scroll)
     utf8_it += scroll;
 
@@ -1633,7 +1636,7 @@ void SkinTheme::paintProgressBar(ui::Graphics* g, const gfx::Rect& rc0, double p
   rc.shrink(1);
 
   int u = (int)((double)rc.w*progress);
-  u = MID(0, u, rc.w);
+  u = base::clamp(u, 0, rc.w);
 
   if (u > 0)
     g->fillRect(colors.selected(), gfx::Rect(rc.x, rc.y, u, rc.h));

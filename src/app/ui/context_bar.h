@@ -1,5 +1,5 @@
 // Aseprite
-// Copyright (C) 2018-2019  Igara Studio S.A.
+// Copyright (C) 2018-2020  Igara Studio S.A.
 // Copyright (C) 2001-2017  David Capello
 //
 // This program is distributed under the terms of
@@ -12,6 +12,7 @@
 #include "app/pref/preferences.h"
 #include "app/shade.h"
 #include "app/tools/active_tool_observer.h"
+#include "app/tools/dynamics.h"
 #include "app/tools/ink_type.h"
 #include "app/tools/tool_loop_modifiers.h"
 #include "app/ui/context_bar_observer.h"
@@ -49,6 +50,7 @@ namespace app {
   }
 
   class BrushSlot;
+  class ColorBar;
   class DitheringSelector;
   class GradientTypeSelector;
 
@@ -56,7 +58,8 @@ namespace app {
                    , public obs::observable<ContextBarObserver>
                    , public tools::ActiveToolObserver {
   public:
-    ContextBar(ui::TooltipManager* tooltipManager);
+    ContextBar(ui::TooltipManager* tooltipManager,
+               ColorBar* colorBar);
     ~ContextBar();
 
     void updateForActiveTool();
@@ -87,6 +90,9 @@ namespace app {
     render::DitheringMatrix ditheringMatrix();
     render::DitheringAlgorithmBase* ditheringAlgorithm();
     render::GradientType gradientType();
+
+    // For freehand with dynamics
+    tools::DynamicsOptions getDynamics();
 
     // Signals
     obs::signal<void()> BrushChange;
@@ -122,6 +128,7 @@ namespace app {
     void setupTooltips(ui::TooltipManager* tooltipManager);
     void registerCommands();
     void showBrushes();
+    void showDynamics();
 
     class ZoomButtons;
     class BrushBackField;
@@ -141,6 +148,7 @@ namespace app {
     class TransparentColorField;
     class PivotField;
     class RotAlgorithmField;
+    class DynamicsField;
     class FreehandAlgorithmField;
     class BrushPatternField;
     class EyedropperField;
@@ -165,6 +173,7 @@ namespace app {
     EyedropperField* m_eyedropperField;
     AutoSelectLayerField* m_autoSelectLayer;
     ui::Box* m_freehandBox;
+    DynamicsField* m_dynamics;
     FreehandAlgorithmField* m_freehandAlgo;
     BrushPatternField* m_brushPatternField;
     ui::Box* m_sprayBox;

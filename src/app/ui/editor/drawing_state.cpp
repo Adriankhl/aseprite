@@ -1,5 +1,5 @@
 // Aseprite
-// Copyright (C) 2018-2019  Igara Studio S.A.
+// Copyright (C) 2018-2020  Igara Studio S.A.
 // Copyright (C) 2001-2018  David Capello
 //
 // This program is distributed under the terms of
@@ -80,6 +80,7 @@ void DrawingState::initToolLoop(Editor* editor,
 
   ASSERT(!m_toolLoopManager->isCanceled());
 
+  m_velocity.reset();
   m_lastPointer = pointer;
   m_toolLoopManager->prepareLoop(pointer);
   m_toolLoopManager->pressButton(pointer);
@@ -110,7 +111,8 @@ bool DrawingState::onMouseDown(Editor* editor, MouseMessage* msg)
   if (!editor->hasCapture())
     editor->captureMouse();
 
-  tools::Pointer pointer = pointer_from_msg(editor, msg);
+  tools::Pointer pointer = pointer_from_msg(editor, msg,
+                                            m_velocity.velocity());
   m_lastPointer = pointer;
 
   // Check if this drawing state was started with a Shift+Pencil tool
@@ -159,9 +161,14 @@ bool DrawingState::onMouseUp(Editor* editor, MouseMessage* msg)
   if (!m_toolLoop->getInk()->isSelection() ||
       m_toolLoop->getController()->isOnePoint() ||
       m_mouseMoveReceived ||
+      // In case of double-click (to select tiles) we don't want to
+      // deselect if the mouse is not moved. In this case the tile
+      // will be selected anyway even if the mouse is not moved.
+      m_type == DrawingType::SelectTiles ||
       (editor->getToolLoopModifiers() != tools::ToolLoopModifiers::kReplaceSelection &&
        editor->getToolLoopModifiers() != tools::ToolLoopModifiers::kIntersectSelection)) {
-    m_lastPointer = pointer_from_msg(editor, msg);
+    m_lastPointer = pointer_from_msg(editor, msg,
+                                     m_velocity.velocity());
 
     // Notify the release of the mouse button to the tool loop
     // manager. This is the correct way to say "the user finishes the
@@ -202,12 +209,18 @@ bool DrawingState::onMouseMove(Editor* editor, MouseMessage* msg)
   base::ScopedValue<bool> disableScroll(m_processScrollChange,
                                         false, m_processScrollChange);
 
+  // Update velocity sensor.
+  m_velocity.updateWithScreenPoint(msg->position());
+
   // The autoScroll() function controls the "infinite scroll" when we
   // touch the viewport borders.
   gfx::Point mousePos = editor->autoScroll(msg, AutoScroll::MouseDir);
   handleMouseMovement(
     tools::Pointer(editor->screenToEditor(mousePos),
-                   button_from_msg(msg)));
+                   m_velocity.velocity(),
+                   button_from_msg(msg),
+                   msg->pointerType(),
+                   msg->pressure()));
 
   return true;
 }
@@ -263,9 +276,16 @@ bool DrawingState::onScrollChange(Editor* editor)
 {
   if (m_processScrollChange) {
     gfx::Point mousePos = ui::get_mouse_position();
+
+    // Update velocity sensor.
+    m_velocity.updateWithScreenPoint(mousePos); // TODO add scroll as velocity?
+
     handleMouseMovement(
       tools::Pointer(editor->screenToEditor(mousePos),
-                     m_lastPointer.button()));
+                     m_velocity.velocity(),
+                     m_lastPointer.button(),
+                     tools::Pointer::Type::Unknown,
+                     0.0f));
   }
   return true;
 }

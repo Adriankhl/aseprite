@@ -1,5 +1,5 @@
 // Aseprite
-// Copyright (C) 2018-2019  Igara Studio S.A.
+// Copyright (C) 2018-2020  Igara Studio S.A.
 // Copyright (C) 2001-2018  David Capello
 //
 // This program is distributed under the terms of
@@ -20,6 +20,7 @@
 #include "app/restore_visible_layers.h"
 #include "app/snap_to_grid.h"
 #include "app/util/autocrop.h"
+#include "base/clamp.h"
 #include "base/convert_to.h"
 #include "base/fs.h"
 #include "base/fstream_path.h"
@@ -44,6 +45,7 @@
 #include "render/dithering.h"
 #include "render/ordered_dither.h"
 #include "render/render.h"
+#include "ver/info.h"
 
 #include <cstdio>
 #include <fstream>
@@ -89,35 +91,7 @@ std::ostream& operator<<(std::ostream& os, const doc::UserData& data)
 
 namespace app {
 
-class SampleBounds {
-public:
-  SampleBounds(Sprite* sprite) :
-    m_originalSize(sprite->width(), sprite->height()),
-    m_trimmedBounds(0, 0, sprite->width(), sprite->height()),
-    m_inTextureBounds(0, 0, sprite->width(), sprite->height()) {
-  }
-
-  bool trimmed() const {
-    return m_trimmedBounds.x > 0
-      || m_trimmedBounds.y > 0
-      || m_trimmedBounds.w != m_originalSize.w
-      || m_trimmedBounds.h != m_originalSize.h;
-  }
-
-  const gfx::Size& originalSize() const { return m_originalSize; }
-  const gfx::Rect& trimmedBounds() const { return m_trimmedBounds; }
-  const gfx::Rect& inTextureBounds() const { return m_inTextureBounds; }
-
-  void setTrimmedBounds(const gfx::Rect& bounds) { m_trimmedBounds = bounds; }
-  void setInTextureBounds(const gfx::Rect& bounds) { m_inTextureBounds = bounds; }
-
-private:
-  gfx::Size m_originalSize;
-  gfx::Rect m_trimmedBounds;
-  gfx::Rect m_inTextureBounds;
-};
-
-typedef std::shared_ptr<SampleBounds> SampleBoundsPtr;
+typedef std::shared_ptr<gfx::Rect> SharedRectPtr;
 
 DocExporter::Item::Item(Doc* doc,
                         const doc::Tag* tag,
@@ -152,7 +126,7 @@ int DocExporter::Item::frames() const
     return selFrames->size();
   else if (tag) {
     int result = tag->toFrame() - tag->fromFrame() + 1;
-    return MID(1, result, doc->sprite()->totalFrames());
+    return base::clamp(result, 1, doc->sprite()->totalFrames());
   }
   else
     return doc->sprite()->totalFrames();
@@ -165,8 +139,8 @@ doc::SelectedFrames DocExporter::Item::getSelectedFrames() const
 
   doc::SelectedFrames frames;
   if (tag) {
-    frames.insert(MID(0, tag->fromFrame(), doc->sprite()->lastFrame()),
-                  MID(0, tag->toFrame(), doc->sprite()->lastFrame()));
+    frames.insert(base::clamp(tag->fromFrame(), 0, doc->sprite()->lastFrame()),
+                  base::clamp(tag->toFrame(), 0, doc->sprite()->lastFrame()));
   }
   else {
     frames.insert(0, doc->sprite()->lastFrame());
@@ -192,7 +166,9 @@ public:
     m_extrude(extrude),
     m_isLinked(false),
     m_isDuplicated(false),
-    m_bounds(new SampleBounds(sprite)) {
+    m_originalSize(sprite->width(), sprite->height()),
+    m_trimmedBounds(0, 0, sprite->width(), sprite->height()),
+    m_inTextureBounds(std::make_shared<gfx::Rect>(0, 0, sprite->width(), sprite->height())) {
   }
 
   Doc* document() const { return m_document; }
@@ -205,34 +181,42 @@ public:
   SelectedLayers* selectedLayers() const { return m_selLayers; }
   frame_t frame() const { return m_frame; }
   std::string filename() const { return m_filename; }
-  const gfx::Size& originalSize() const { return m_bounds->originalSize(); }
-  const gfx::Rect& trimmedBounds() const { return m_bounds->trimmedBounds(); }
-  const gfx::Rect& inTextureBounds() const { return m_bounds->inTextureBounds(); }
+  const gfx::Size& originalSize() const { return m_originalSize; }
+  const gfx::Rect& trimmedBounds() const { return m_trimmedBounds; }
+  const gfx::Rect& inTextureBounds() const { return *m_inTextureBounds; }
+  const SharedRectPtr& sharedBounds() const { return m_inTextureBounds; }
 
   gfx::Size requiredSize() const {
     // if extrude option is enabled, an extra pixel is needed for each side
     // left+right borders and top+bottom borders
     int extraExtrudePixels = m_extrude ? 2 : 0;
-    gfx::Size size = m_bounds->trimmedBounds().size();
+    gfx::Size size = m_trimmedBounds.size();
     size.w += 2*m_innerPadding + extraExtrudePixels;
     size.h += 2*m_innerPadding + extraExtrudePixels;
     return size;
   }
 
   bool trimmed() const {
-    return m_bounds->trimmed();
+    return (m_trimmedBounds.x > 0 ||
+            m_trimmedBounds.y > 0 ||
+            m_trimmedBounds.w != m_originalSize.w ||
+            m_trimmedBounds.h != m_originalSize.h);
   }
 
   void setTrimmedBounds(const gfx::Rect& bounds) {
     // TODO we cannot assign an empty rectangle (samples that are
     // completely trimmed out should be included as a sample of size 1x1)
     ASSERT(!bounds.isEmpty());
-    m_bounds->setTrimmedBounds(bounds);
+    m_trimmedBounds = bounds;
   }
 
   void setInTextureBounds(const gfx::Rect& bounds) {
     ASSERT(!bounds.isEmpty());
-    m_bounds->setInTextureBounds(bounds);
+    *m_inTextureBounds = bounds;
+  }
+
+  void setSharedBounds(const SharedRectPtr& bounds) {
+    m_inTextureBounds = bounds;
   }
 
   bool isLinked() const { return m_isLinked; }
@@ -240,25 +224,20 @@ public:
   bool isEmpty() const {
     // TODO trimmed bounds cannot be empty now (samples that are
     // completely trimmed out are included as a sample of size 1x1)
-    ASSERT(!m_bounds->trimmedBounds().isEmpty());
-    return m_bounds->trimmedBounds().isEmpty();
+    ASSERT(!m_trimmedBounds.isEmpty());
+    return m_trimmedBounds.isEmpty();
   }
-  SampleBoundsPtr sharedBounds() const { return m_bounds; }
 
   void setLinked() { m_isLinked = true; }
   void setDuplicated() { m_isDuplicated = true; }
-
-  void setSharedBounds(const SampleBoundsPtr& bounds) {
-    m_bounds = bounds;
-  }
 
   ImageRef createRender(ImageBufferPtr& imageBuf) {
     ASSERT(m_sprite);
 
     ImageRef render(
       Image::create(m_sprite->pixelFormat(),
-                    m_sprite->width(),
-                    m_sprite->height(),
+                    m_trimmedBounds.w,
+                    m_trimmedBounds.h,
                     imageBuf));
     render->setMaskColor(m_sprite->transparentColor());
     clear_image(render.get(), m_sprite->transparentColor());
@@ -279,7 +258,7 @@ public:
     //render.setNewBlend(Preferences::instance().experimental.newBlend());
 
     if (extrude) {
-      const gfx::Rect& trim = trimmedBounds();
+      const gfx::Rect& trim = m_trimmedBounds;
 
       // Displaced position onto the destination texture
       int dx[] = { 0, 1, trim.w+1 };
@@ -305,7 +284,7 @@ public:
       }
     }
     else {
-      gfx::Clip clip(x, y, trimmedBounds());
+      gfx::Clip clip(x, y, m_trimmedBounds);
       render.renderSprite(dst, m_sprite, m_frame, clip);
     }
   }
@@ -321,7 +300,9 @@ private:
   bool m_extrude;
   bool m_isLinked;
   bool m_isDuplicated;
-  SampleBoundsPtr m_bounds;
+  gfx::Size m_originalSize;
+  gfx::Rect m_trimmedBounds;
+  SharedRectPtr m_inTextureBounds;
 };
 
 class DocExporter::Samples {
@@ -950,6 +931,7 @@ void DocExporter::captureSamples(Samples& samples,
         ASSERT(done || (!done && tag));
       }
 
+      bool alreadyTrimmed = false;
       if (!done && (m_ignoreEmptyCels || m_trimCels)) {
         // Ignore empty cels
         if (layer && layer->isImage() && !cel && m_ignoreEmptyCels)
@@ -1013,11 +995,10 @@ void DocExporter::captureSamples(Samples& samples,
             frameBounds = gfx::Rect(posTopLeft, posBottomRight);
           }
           sample.setTrimmedBounds(frameBounds);
+          alreadyTrimmed = true;
         }
-        else if (m_trimSprite)
-          sample.setTrimmedBounds(spriteBounds);
       }
-      else if (m_trimSprite)
+      if (!alreadyTrimmed && m_trimSprite)
         sample.setTrimmedBounds(spriteBounds);
 
       samples.addSample(sample);
@@ -1198,7 +1179,8 @@ void DocExporter::renderTexture(Context* ctx,
         sample.sprite(),
         textureImage->pixelFormat(),
         render::Dithering(),
-        nullptr)                // TODO add a delegate to show progress
+        nullptr, // toGray is not needed because the texture is Indexed or RGB
+        nullptr) // TODO add a delegate to show progress
         .execute(ctx);
     }
 
@@ -1320,8 +1302,8 @@ void DocExporter::createDataFile(const Samples& samples,
   // "meta" property
   os << ",\n"
      << " \"meta\": {\n"
-     << "  \"app\": \"" << WEBSITE << "\",\n"
-     << "  \"version\": \"" << VERSION << "\",\n";
+     << "  \"app\": \"" << get_app_url() << "\",\n"
+     << "  \"version\": \"" << get_app_version() << "\",\n";
 
   if (!m_textureFilename.empty())
     os << "  \"image\": \""

@@ -1,5 +1,5 @@
 // Aseprite
-// Copyright (C) 2018-2019  Igara Studio S.A.
+// Copyright (C) 2018-2020  Igara Studio S.A.
 // Copyright (C) 2015-2018  David Capello
 //
 // This program is distributed under the terms of
@@ -44,6 +44,7 @@
 #include "doc/tag.h"
 #include "render/render.h"
 #include "ui/alert.h"
+#include "ver/info.h"
 
 #include <iostream>
 
@@ -229,7 +230,9 @@ int App_alert(lua_State* L)
 int App_refresh(lua_State* L)
 {
 #ifdef ENABLE_UI
-  app_refresh_screen();
+  app::Context* ctx = App::instance()->context();
+  if (ctx && ctx->isUIAvailable())
+    app_refresh_screen();
 #endif
   return 0;
 }
@@ -325,7 +328,13 @@ int App_useTool(lua_State* L)
     while (lua_next(L, -2) != 0) {
       gfx::Point pt = convert_args_into_point(L, -1);
 
-      tools::Pointer pointer(pt, tools::Pointer::Button::Left);
+      tools::Pointer pointer(
+        pt,
+        // TODO configurable params
+        tools::Vec2(0.0f, 0.0f),
+        tools::Pointer::Button::Left,
+        tools::Pointer::Type::Unknown,
+        0.0f);
       if (first) {
         first = false;
         manager.prepareLoop(pointer);
@@ -481,7 +490,7 @@ int App_get_isUIAvailable(lua_State* L)
 
 int App_get_version(lua_State* L)
 {
-  std::string ver = VERSION;
+  std::string ver = get_app_version();
   base::replace_string(ver, "-x64", ""); // Remove "-x64" suffix
   push_version(L, base::Version(ver));
   return 1;

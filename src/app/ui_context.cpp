@@ -1,5 +1,5 @@
 // Aseprite
-// Copyright (C) 2019  Igara Studio S.A.
+// Copyright (C) 2019-2020  Igara Studio S.A.
 // Copyright (C) 2001-2018  David Capello
 //
 // This program is distributed under the terms of
@@ -14,7 +14,6 @@
 #include "app/app.h"
 #include "app/doc.h"
 #include "app/modules/editors.h"
-#include "app/pref/preferences.h"
 #include "app/site.h"
 #include "app/ui/color_bar.h"
 #include "app/ui/doc_view.h"
@@ -38,24 +37,26 @@ UIContext* UIContext::m_instance = nullptr;
 
 UIContext::UIContext()
   : m_lastSelectedView(nullptr)
+  , m_closedDocs(preferences())
 {
-  documents().add_observer(&Preferences::instance());
-
-  ASSERT(m_instance == NULL);
+  ASSERT(m_instance == nullptr);
   m_instance = this;
 }
 
 UIContext::~UIContext()
 {
   ASSERT(m_instance == this);
-  m_instance = NULL;
-
-  documents().remove_observer(&Preferences::instance());
+  m_instance = nullptr;
 
   // The context must be empty at this point. (It's to check if the UI
   // is working correctly, i.e. closing all files when the user can
   // take any action about it.)
-  ASSERT(documents().empty());
+  //
+  // Note: This assert is commented because it's really common to hit
+  // it when the program crashes by any other reason, and we would
+  // like to see that other reason instead of this assert.
+
+  //ASSERT(documents().empty());
 }
 
 bool UIContext::isUIAvailable() const
@@ -165,6 +166,19 @@ void UIContext::onSetActiveFrame(const doc::frame_t frame)
   }
   else if (!isUIAvailable())
     Context::onSetActiveFrame(frame);
+}
+
+void UIContext::onSetRange(const DocRange& range)
+{
+  Timeline* timeline =
+    (App::instance()->mainWindow() ?
+     App::instance()->mainWindow()->getTimeline(): nullptr);
+  if (timeline) {
+    timeline->setRange(range);
+  }
+  else if (!isUIAvailable()) {
+    Context::onSetRange(range);
+  }
 }
 
 void UIContext::onSetSelectedColors(const doc::PalettePicks& picks)

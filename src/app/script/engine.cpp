@@ -1,5 +1,5 @@
 // Aseprite
-// Copyright (C) 2018-2019  Igara Studio S.A.
+// Copyright (C) 2018-2020  Igara Studio S.A.
 // Copyright (C) 2001-2018  David Capello
 //
 // This program is distributed under the terms of
@@ -26,6 +26,7 @@
 #include "doc/blend_mode.h"
 #include "doc/color_mode.h"
 #include "filters/target.h"
+#include "ui/mouse_button.h"
 
 #include <fstream>
 #include <sstream>
@@ -73,8 +74,13 @@ int print(lua_State* L)
     lua_pop(L, 1);  // pop result
   }
   if (!output.empty()) {
-    App::instance()->scriptEngine()
-      ->consolePrint(output.c_str());
+    auto app = App::instance();
+    if (app && app->scriptEngine())
+      app->scriptEngine()->consolePrint(output.c_str());
+    else {
+      std::printf("%s\n", output.c_str());
+      std::fflush(stdout);
+    }
   }
   return 0;
 }
@@ -135,6 +141,7 @@ int unsupported(lua_State* L)
 
 void register_app_object(lua_State* L);
 void register_app_pixel_color_object(lua_State* L);
+void register_app_fs_object(lua_State* L);
 void register_app_command_object(lua_State* L);
 void register_app_preferences_object(lua_State* L);
 
@@ -154,6 +161,7 @@ void register_layer_class(lua_State* L);
 void register_layers_class(lua_State* L);
 void register_palette_class(lua_State* L);
 void register_palettes_class(lua_State* L);
+void register_plugin_class(lua_State* L);
 void register_point_class(lua_State* L);
 void register_range_class(lua_State* L);
 void register_rect_class(lua_State* L);
@@ -232,6 +240,7 @@ Engine::Engine()
   // Register global app object
   register_app_object(L);
   register_app_pixel_color_object(L);
+  register_app_fs_object(L);
   register_app_command_object(L);
   register_app_preferences_object(L);
 
@@ -334,6 +343,17 @@ Engine::Engine()
   setfield_integer(L, "GRAYA",   TARGET_GRAY_CHANNEL | TARGET_ALPHA_CHANNEL);
   lua_pop(L, 1);
 
+  lua_newtable(L);
+  lua_pushvalue(L, -1);
+  lua_setglobal(L, "MouseButton");
+  setfield_integer(L, "NONE",   (int)ui::kButtonNone);
+  setfield_integer(L, "LEFT",   (int)ui::kButtonLeft);
+  setfield_integer(L, "RIGHT",  (int)ui::kButtonRight);
+  setfield_integer(L, "MIDDLE", (int)ui::kButtonMiddle);
+  setfield_integer(L, "X1",     (int)ui::kButtonX1);
+  setfield_integer(L, "X2",     (int)ui::kButtonX2);
+  lua_pop(L, 1);
+
   // Register classes/prototypes
   register_brush_class(L);
   register_cel_class(L);
@@ -351,6 +371,7 @@ Engine::Engine()
   register_layers_class(L);
   register_palette_class(L);
   register_palettes_class(L);
+  register_plugin_class(L);
   register_point_class(L);
   register_range_class(L);
   register_rect_class(L);
@@ -442,6 +463,9 @@ bool Engine::evalFile(const std::string& filename,
 
 void Engine::onConsolePrint(const char* text)
 {
+  if (!text)
+    return;
+
   if (m_delegate)
     m_delegate->onConsolePrint(text);
   else {

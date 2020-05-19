@@ -1,5 +1,5 @@
 // Aseprite
-// Copyright (C) 2019  Igara Studio S.A.
+// Copyright (C) 2019-2020  Igara Studio S.A.
 // Copyright (C) 2001-2018  David Capello
 //
 // This program is distributed under the terms of
@@ -8,6 +8,7 @@
 #include "app/modules/palettes.h"
 #include "app/util/wrap_point.h"
 #include "app/util/wrap_value.h"
+#include "base/clamp.h"
 #include "doc/blend_funcs.h"
 #include "doc/blend_internals.h"
 #include "doc/image_impl.h"
@@ -34,6 +35,9 @@ public:
   virtual void processScanline(int x1, int y, int x2, ToolLoop* loop) = 0;
   virtual void prepareForStrokes(ToolLoop* loop, Strokes& strokes) { }
   virtual void prepareForPointShape(ToolLoop* loop, bool firstPoint, int x, int y) { }
+  virtual void prepareVForPointShape(ToolLoop* loop, int y) { }
+  virtual void prepareUForPointShapeWholeScanline(ToolLoop* loop, int x1) { }
+  virtual void prepareUForPointShapeSlicedScanline(ToolLoop* loop, bool leftSlice, int x1) { }
 };
 
 typedef std::unique_ptr<BaseInkProcessing> InkProcessingPtr;
@@ -126,6 +130,9 @@ template<typename ImageTraits>
 class CopyInkProcessing : public SimpleInkProcessing<CopyInkProcessing<ImageTraits>, ImageTraits> {
 public:
   CopyInkProcessing(ToolLoop* loop) {
+  }
+
+  void prepareForPointShape(ToolLoop* loop, bool firstPoint, int x, int y) override {
     m_color = loop->getPrimaryColor();
 
     if (loop->getLayer()->isBackground()) {
@@ -152,8 +159,11 @@ template<typename ImageTraits>
 class LockAlphaInkProcessing : public DoubleInkProcessing<LockAlphaInkProcessing<ImageTraits>, ImageTraits> {
 public:
   LockAlphaInkProcessing(ToolLoop* loop)
-    : m_color(loop->getPrimaryColor())
-    , m_opacity(loop->getOpacity()) {
+    : m_opacity(loop->getOpacity()) {
+  }
+
+  void prepareForPointShape(ToolLoop* loop, bool firstPoint, int x, int y) override {
+    m_color = loop->getPrimaryColor();
   }
 
   void processPixel(int x, int y) {
@@ -161,7 +171,7 @@ public:
   }
 
 private:
-  const color_t m_color;
+  color_t m_color;
   const int m_opacity;
 };
 
@@ -189,9 +199,12 @@ public:
   LockAlphaInkProcessing(ToolLoop* loop)
     : m_palette(get_current_palette())
     , m_rgbmap(loop->getRgbMap())
-    , m_color(m_palette->getEntry(loop->getPrimaryColor()))
     , m_opacity(loop->getOpacity())
     , m_maskIndex(loop->getLayer()->isBackground() ? -1: loop->sprite()->transparentColor()) {
+  }
+
+  void prepareForPointShape(ToolLoop* loop, bool firstPoint, int x, int y) override {
+    m_color = m_palette->getEntry(loop->getPrimaryColor());
   }
 
   void processPixel(int x, int y) {
@@ -213,7 +226,7 @@ public:
 private:
   const Palette* m_palette;
   const RgbMap* m_rgbmap;
-  const color_t m_color;
+  color_t m_color;
   const int m_opacity;
   const int m_maskIndex;
 };
@@ -226,8 +239,11 @@ template<typename ImageTraits>
 class TransparentInkProcessing : public DoubleInkProcessing<TransparentInkProcessing<ImageTraits>, ImageTraits> {
 public:
   TransparentInkProcessing(ToolLoop* loop) {
-    m_color = loop->getPrimaryColor();
     m_opacity = loop->getOpacity();
+  }
+
+  void prepareForPointShape(ToolLoop* loop, bool firstPoint, int x, int y) override {
+    m_color = loop->getPrimaryColor();
   }
 
   void processPixel(int x, int y) {
@@ -256,8 +272,11 @@ public:
     m_palette(get_current_palette()),
     m_rgbmap(loop->getRgbMap()),
     m_opacity(loop->getOpacity()),
-    m_color(m_palette->getEntry(loop->getPrimaryColor())),
     m_maskIndex(loop->getLayer()->isBackground() ? -1: loop->sprite()->transparentColor()) {
+  }
+
+  void prepareForPointShape(ToolLoop* loop, bool firstPoint, int x, int y) override {
+    m_color = m_palette->getEntry(loop->getPrimaryColor());
   }
 
   void processPixel(int x, int y) {
@@ -278,7 +297,7 @@ private:
   const Palette* m_palette;
   const RgbMap* m_rgbmap;
   const int m_opacity;
-  const color_t m_color;
+  color_t m_color;
   const int m_maskIndex;
 };
 
@@ -290,8 +309,11 @@ template<typename ImageTraits>
 class MergeInkProcessing : public DoubleInkProcessing<MergeInkProcessing<ImageTraits>, ImageTraits> {
 public:
   MergeInkProcessing(ToolLoop* loop) {
-    m_color = loop->getPrimaryColor();
     m_opacity = loop->getOpacity();
+  }
+
+  void prepareForPointShape(ToolLoop* loop, bool firstPoint, int x, int y) override {
+    m_color = loop->getPrimaryColor();
   }
 
   void processPixel(int x, int y) {
@@ -320,10 +342,13 @@ public:
     m_palette(get_current_palette()),
     m_rgbmap(loop->getRgbMap()),
     m_opacity(loop->getOpacity()),
-    m_maskIndex(loop->getLayer()->isBackground() ? -1: loop->sprite()->transparentColor()),
-    m_color(int(loop->getPrimaryColor()) == m_maskIndex ?
-            (m_palette->getEntry(loop->getPrimaryColor()) & rgba_rgb_mask):
-            (m_palette->getEntry(loop->getPrimaryColor()))) {
+    m_maskIndex(loop->getLayer()->isBackground() ? -1: loop->sprite()->transparentColor()) {
+  }
+
+  void prepareForPointShape(ToolLoop* loop, bool firstPoint, int x, int y) override {
+    m_color = (int(loop->getPrimaryColor()) == m_maskIndex ?
+               (m_palette->getEntry(loop->getPrimaryColor()) & rgba_rgb_mask):
+               (m_palette->getEntry(loop->getPrimaryColor())));
   }
 
   void processPixel(int x, int y) {
@@ -345,7 +370,7 @@ private:
   const RgbMap* m_rgbmap;
   const int m_opacity;
   const int m_maskIndex;
-  const color_t m_color;
+  color_t m_color;
 };
 
 //////////////////////////////////////////////////////////////////////
@@ -648,8 +673,8 @@ private:
                               m_srcImageHeight),
                     pt, false);
 
-    pt.x = MID(0, pt.x, m_srcImageWidth-1);
-    pt.y = MID(0, pt.y, m_srcImageHeight-1);
+    pt.x = base::clamp(pt.x, 0, m_srcImageWidth-1);
+    pt.y = base::clamp(pt.y, 0, m_srcImageHeight-1);
 
     m_color = get_pixel(m_srcImage, pt.x, pt.y);
   }
@@ -907,8 +932,8 @@ public:
       return;
     }
 
-    const gfx::Point u = strokes[0].firstPoint();
-    const gfx::Point v = strokes[0].lastPoint();
+    const gfx::Point u = strokes[0].firstPoint().toPoint();
+    const gfx::Point v = strokes[0].lastPoint().toPoint();
 
     // The image position for the gradient depends on the first user
     // click. The gradient depends on the first clicked tile.
@@ -948,7 +973,6 @@ public:
     , m_palette(get_current_palette())
     , m_rgbmap(loop->getRgbMap())
     , m_maskIndex(loop->getLayer()->isBackground() ? -1: loop->sprite()->transparentColor())
-    , m_matrix(loop->getDitheringMatrix())
   {
   }
 
@@ -970,7 +994,6 @@ private:
   const Palette* m_palette;
   const RgbMap* m_rgbmap;
   const int m_maskIndex;
-  const render::DitheringMatrix m_matrix;
 };
 
 template<>
@@ -1111,8 +1134,10 @@ public:
     m_bgColor = loop->getSecondaryColor();
     m_palette = get_current_palette();
     m_brush = loop->getBrush();
-    m_brushImage = m_brush->image();
+    m_brushImage = (m_brush->patternImage() ? m_brush->patternImage():
+                                              m_brush->image());
     m_brushMask = m_brush->maskBitmap();
+    m_patternAlign = m_brush->pattern();
     m_opacity = loop->getOpacity();
     m_width = m_brush->bounds().w;
     m_height = m_brush->bounds().h;
@@ -1122,10 +1147,52 @@ public:
   }
 
   void prepareForPointShape(ToolLoop* loop, bool firstPoint, int x, int y) override {
-    if ((m_brush->pattern() == BrushPattern::ALIGNED_TO_DST && firstPoint) ||
-        (m_brush->pattern() == BrushPattern::PAINT_BRUSH)) {
-      m_u = (m_brush->patternOrigin().x - loop->getCelOrigin().x) % m_width;
+    if ((m_patternAlign == BrushPattern::ALIGNED_TO_DST && firstPoint) ||
+        (m_patternAlign == BrushPattern::PAINT_BRUSH)) {
+      m_u = ((m_brush->patternOrigin().x % loop->sprite()->width()) - loop->getCelOrigin().x) % m_width;
+      m_v = ((m_brush->patternOrigin().y % loop->sprite()->height()) - loop->getCelOrigin().y) % m_height;
+    }
+  }
+
+  void prepareVForPointShape(ToolLoop* loop, int y) override {
+    if (m_patternAlign == doc::BrushPattern::ALIGNED_TO_SRC) {
       m_v = (m_brush->patternOrigin().y - loop->getCelOrigin().y) % m_height;
+      if (m_v < 0) m_v += m_height;
+    }
+    else {
+      int spriteH = loop->sprite()->height();
+      if (y/spriteH > 0)
+        // 'y' is outside of the center tile.
+        m_v = (m_brush->patternOrigin().y + m_height - (y/spriteH) * spriteH) % m_height;
+      else
+        // 'y' is inside of the center tile.
+        m_v = ((m_brush->patternOrigin().y % spriteH) - loop->getCelOrigin().y) % m_height;
+    }
+  }
+
+  void prepareUForPointShapeWholeScanline(ToolLoop* loop, int x1) override {
+    if (m_patternAlign == doc::BrushPattern::ALIGNED_TO_SRC) {
+      m_u = (m_brush->patternOrigin().x - loop->getCelOrigin().x) % m_width;
+      if (m_u < 0) m_u += m_height;
+    }
+    else {
+      m_u = ((m_brush->patternOrigin().x % loop->sprite()->width()) - loop->getCelOrigin().x ) % m_width;
+      if (x1/loop->sprite()->width() > 0)
+        m_u = (m_brush->patternOrigin().x + m_width - (x1/loop->sprite()->width()) * loop->sprite()->width()) % m_width;
+    }
+  }
+
+  void prepareUForPointShapeSlicedScanline(ToolLoop* loop, bool leftSlice, int x1) override {
+    if (m_patternAlign == doc::BrushPattern::ALIGNED_TO_SRC) {
+      m_u = (m_brush->patternOrigin().x - loop->getCelOrigin().x) % m_width;
+      if (m_u < 0) m_u += m_height;
+      return;
+    }
+    else {
+      if (leftSlice)
+        m_u = ((m_brush->patternOrigin().x % loop->sprite()->width()) - loop->getCelOrigin().x ) % m_width;
+      else
+        m_u = (m_brush->patternOrigin().x + m_width - (x1/loop->sprite()->width() + 1) * loop->sprite()->width()) % m_width;
     }
   }
 
@@ -1141,14 +1208,28 @@ public:
     // Do nothing
   }
 
-  color_t getTransparentColor() { return m_transparentColor; }
-
 protected:
-  void alignPixelPoint(int& x, int& y) {
-    x = (x - m_u) % m_width;
-    y = (y - m_v) % m_height;
+  bool alignPixelPoint(int& x0, int& y0) {
+    int x = (x0 - m_u) % m_width;
+    int y = (y0 - m_v) % m_height;
     if (x < 0) x = m_width - ((-x) % m_width);
     if (y < 0) y = m_height - ((-y) % m_height);
+
+    if (m_brushMask && !get_pixel_fast<BitmapTraits>(m_brushMask, x, y))
+      return false;
+
+    if (m_brush->patternImage()) {
+      const int w = m_brush->patternImage()->width();
+      const int h = m_brush->patternImage()->height();
+      x = x0 % w;
+      y = y0 % h;
+      if (x < 0) x = w - ((-x) % w);
+      if (y < 0) y = h - ((-y) % h);
+    }
+
+    x0 = x;
+    y0 = y;
+    return true;
   }
 
   color_t m_fgColor;
@@ -1157,6 +1238,7 @@ protected:
   const Brush* m_brush;
   const Image* m_brushImage;
   const Image* m_brushMask;
+  BrushPattern m_patternAlign;
   int m_opacity;
   int m_u, m_v, m_width, m_height;
   // When we have a image brush from an INDEXED sprite, we need to know
@@ -1167,8 +1249,7 @@ protected:
 
 template<>
 bool BrushInkProcessingBase<RgbTraits>::preProcessPixel(int x, int y, color_t* result) {
-  alignPixelPoint(x, y);
-  if (m_brushMask && !get_pixel_fast<BitmapTraits>(m_brushMask, x, y))
+  if (!alignPixelPoint(x, y))
     return false;
 
   color_t c;
@@ -1219,8 +1300,7 @@ bool BrushInkProcessingBase<RgbTraits>::preProcessPixel(int x, int y, color_t* r
 
 template<>
 bool BrushInkProcessingBase<GrayscaleTraits>::preProcessPixel(int x, int y, color_t* result) {
-  alignPixelPoint(x, y);
-  if (m_brushMask && !get_pixel_fast<BitmapTraits>(m_brushMask, x, y))
+  if (!alignPixelPoint(x, y))
     return false;
 
   color_t c;
@@ -1268,8 +1348,7 @@ bool BrushInkProcessingBase<GrayscaleTraits>::preProcessPixel(int x, int y, colo
 
 template<>
 bool BrushInkProcessingBase<IndexedTraits>::preProcessPixel(int x, int y, color_t* result) {
-  alignPixelPoint(x, y);
-  if (m_brushMask && !get_pixel_fast<BitmapTraits>(m_brushMask, x, y))
+  if (!alignPixelPoint(x, y))
     return false;
 
   color_t c;
@@ -1368,10 +1447,11 @@ void BrushLockAlphaInkProcessing<RgbTraits>::processPixel(int x, int y) {
 
 template<>
 void BrushLockAlphaInkProcessing<IndexedTraits>::processPixel(int x, int y) {
-  color_t c;
-  if (preProcessPixel(x, y, &c))
-    if (*m_srcAddress != getTransparentColor())
+  if (*m_srcAddress != m_transparentColor) {
+    color_t c;
+    if (preProcessPixel(x, y, &c))
       *m_dstAddress = c;
+  }
 }
 
 template<>
@@ -1398,8 +1478,7 @@ public:
 
 template<>
 void BrushEraserInkProcessing<RgbTraits>::processPixel(int x, int y) {
-  alignPixelPoint(x, y);
-  if (m_brushMask && !get_pixel_fast<BitmapTraits>(m_brushMask, x, y))
+  if (!alignPixelPoint(x, y))
     return;
 
   color_t c;
@@ -1456,8 +1535,7 @@ void BrushEraserInkProcessing<RgbTraits>::processPixel(int x, int y) {
 
 template<>
 void BrushEraserInkProcessing<GrayscaleTraits>::processPixel(int x, int y) {
-  alignPixelPoint(x, y);
-  if (m_brushMask && !get_pixel_fast<BitmapTraits>(m_brushMask, x, y))
+  if (!alignPixelPoint(x, y))
     return;
 
   color_t c;
@@ -1508,8 +1586,7 @@ void BrushEraserInkProcessing<GrayscaleTraits>::processPixel(int x, int y) {
 
 template<>
 void BrushEraserInkProcessing<IndexedTraits>::processPixel(int x, int y) {
-  alignPixelPoint(x, y);
-  if (m_brushMask && !get_pixel_fast<BitmapTraits>(m_brushMask, x, y))
+  if (!alignPixelPoint(x, y))
     return;
 
   color_t c;
@@ -1586,8 +1663,7 @@ RgbTraits::pixel_t BrushShadingInkProcessing<RgbTraits>::shadingProcessPixel(int
 
 template <>
 void BrushShadingInkProcessing<RgbTraits>::processPixel(int x, int y) {
-  alignPixelPoint(x, y);
-  if (m_brushMask && !get_pixel_fast<BitmapTraits>(m_brushMask, x, y))
+  if (!alignPixelPoint(x, y))
     return;
 
   RgbTraits::pixel_t c;
@@ -1643,8 +1719,7 @@ IndexedTraits::pixel_t BrushShadingInkProcessing<IndexedTraits>::shadingProcessP
 
 template <>
 void BrushShadingInkProcessing<IndexedTraits>::processPixel(int x, int y) {
-  alignPixelPoint(x, y);
-  if (m_brushMask && !get_pixel_fast<BitmapTraits>(m_brushMask, x, y))
+  if (!alignPixelPoint(x, y))
     return;
 
   color_t c;
@@ -1704,8 +1779,7 @@ GrayscaleTraits::pixel_t BrushShadingInkProcessing<GrayscaleTraits>::shadingProc
 
 template <>
 void BrushShadingInkProcessing<GrayscaleTraits>::processPixel(int x, int y) {
-  alignPixelPoint(x, y);
-  if (m_brushMask && !get_pixel_fast<BitmapTraits>(m_brushMask, x, y))
+  if (!alignPixelPoint(x, y))
     return;
 
   int iBrush = -1;
@@ -1773,8 +1847,7 @@ public:
 
 template<>
 void BrushCopyInkProcessing<RgbTraits>::processPixel(int x, int y) {
-  alignPixelPoint(x, y);
-  if (m_brushMask && !get_pixel_fast<BitmapTraits>(m_brushMask, x, y))
+  if (!alignPixelPoint(x, y))
     return;
 
   color_t c;
@@ -1820,8 +1893,7 @@ void BrushCopyInkProcessing<RgbTraits>::processPixel(int x, int y) {
 
 template<>
 void BrushCopyInkProcessing<IndexedTraits>::processPixel(int x, int y) {
-  alignPixelPoint(x, y);
-  if (m_brushMask && !get_pixel_fast<BitmapTraits>(m_brushMask, x, y))
+  if (!alignPixelPoint(x, y))
     return;
 
   color_t c;
@@ -1866,8 +1938,7 @@ void BrushCopyInkProcessing<IndexedTraits>::processPixel(int x, int y) {
 
 template<>
 void BrushCopyInkProcessing<GrayscaleTraits>::processPixel(int x, int y) {
-  alignPixelPoint(x, y);
-  if (m_brushMask && !get_pixel_fast<BitmapTraits>(m_brushMask, x, y))
+  if (!alignPixelPoint(x, y))
     return;
 
   color_t c;

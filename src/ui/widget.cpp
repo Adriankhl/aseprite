@@ -1,5 +1,5 @@
 // Aseprite UI Library
-// Copyright (C) 2018-2019  Igara Studio S.A.
+// Copyright (C) 2018-2020  Igara Studio S.A.
 // Copyright (C) 2001-2018  David Capello
 //
 // This file is released under the terms of the MIT license.
@@ -13,6 +13,7 @@
 
 #include "ui/widget.h"
 
+#include "base/clamp.h"
 #include "base/memory.h"
 #include "base/string.h"
 #include "os/display.h"
@@ -35,6 +36,7 @@
 #include "ui/view.h"
 #include "ui/window.h"
 
+#include <algorithm>
 #include <cctype>
 #include <cstdarg>
 #include <cstdio>
@@ -423,17 +425,17 @@ Widget* Widget::nextSibling()
   assert_ui_thread();
 
   if (!m_parent)
-    return NULL;
+    return nullptr;
 
   WidgetsList::iterator begin = m_parent->m_children.begin();
   WidgetsList::iterator end = m_parent->m_children.end();
   WidgetsList::iterator it = std::find(begin, end, this);
 
   if (it == end)
-    return NULL;
+    return nullptr;
 
   if (++it == end)
-    return NULL;
+    return nullptr;
 
   return *it;
 }
@@ -443,16 +445,16 @@ Widget* Widget::previousSibling()
   assert_ui_thread();
 
   if (!m_parent)
-    return NULL;
+    return nullptr;
 
   WidgetsList::iterator begin = m_parent->m_children.begin();
   WidgetsList::iterator end = m_parent->m_children.end();
   WidgetsList::iterator it = std::find(begin, end, this);
 
   if (it == begin || it == end)
-    return NULL;
+    return nullptr;
 
-  return *(++it);
+  return *(--it);
 }
 
 Widget* Widget::pick(const gfx::Point& pt,
@@ -540,7 +542,7 @@ void Widget::removeChild(WidgetsList::iterator& it)
   if (manager)
     manager->freeWidget(child);
 
-  child->m_parent = NULL;
+  child->m_parent = nullptr;
 }
 
 void Widget::removeChild(Widget* child)
@@ -863,19 +865,19 @@ void Widget::getTextIconInfo(
   // Box size
   if (icon_align & CENTER) {   // With the icon in the center
     if (icon_align & MIDDLE) { // With the icon inside the text
-      box_w = MAX(icon_w, text_w);
-      box_h = MAX(icon_h, text_h);
+      box_w = std::max(icon_w, text_w);
+      box_h = std::max(icon_h, text_h);
     }
     // With the icon in the top or bottom
     else {
-      box_w = MAX(icon_w, text_w);
+      box_w = std::max(icon_w, text_w);
       box_h = icon_h + (hasText() ? childSpacing(): 0) + text_h;
     }
   }
   // With the icon in left or right that doesn't care by now
   else {
     box_w = icon_w + (hasText() ? childSpacing(): 0) + text_w;
-    box_h = MAX(icon_h, text_h);
+    box_h = std::max(icon_h, text_h);
   }
 
   // Box position
@@ -1217,8 +1219,8 @@ Size Widget::sizeHint()
     onSizeHint(ev);
 
     Size sz(ev.sizeHint());
-    sz.w = MID(m_minSize.w, sz.w, m_maxSize.w);
-    sz.h = MID(m_minSize.h, sz.h, m_maxSize.h);
+    sz.w = base::clamp(sz.w, m_minSize.w, m_maxSize.w);
+    sz.h = base::clamp(sz.h, m_minSize.h, m_maxSize.h);
     return sz;
   }
 }
@@ -1246,8 +1248,8 @@ Size Widget::sizeHint(const Size& fitIn)
     onSizeHint(ev);
 
     Size sz(ev.sizeHint());
-    sz.w = MID(m_minSize.w, sz.w, m_maxSize.w);
-    sz.h = MID(m_minSize.h, sz.h, m_maxSize.h);
+    sz.w = base::clamp(sz.w, m_minSize.w, m_maxSize.w);
+    sz.h = base::clamp(sz.h, m_minSize.h, m_maxSize.h);
     return sz;
   }
 }
@@ -1317,7 +1319,7 @@ bool Widget::offerCapture(ui::MouseMessage* mouseMsg, int widget_type)
       MouseMessage* mouseMsg2 = new MouseMessage(
         kMouseDownMessage,
         mouseMsg->pointerType(),
-        mouseMsg->buttons(),
+        mouseMsg->button(),
         mouseMsg->modifiers(),
         mouseMsg->position());
       mouseMsg2->setRecipient(pick);
@@ -1378,7 +1380,7 @@ bool Widget::isMnemonicPressed(const KeyMessage* keyMsg) const
 
 bool Widget::onProcessMessage(Message* msg)
 {
-  ASSERT(msg != NULL);
+  ASSERT(msg != nullptr);
 
   switch (msg->type()) {
 
@@ -1404,7 +1406,7 @@ bool Widget::onProcessMessage(Message* msg)
       MouseMessage* mouseMsg = static_cast<MouseMessage*>(msg);
       MouseMessage mouseMsg2(kMouseDownMessage,
                              mouseMsg->pointerType(),
-                             mouseMsg->buttons(),
+                             mouseMsg->button(),
                              mouseMsg->modifiers(),
                              mouseMsg->position(),
                              mouseMsg->wheelDelta());

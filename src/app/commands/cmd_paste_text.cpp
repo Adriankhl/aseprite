@@ -1,5 +1,5 @@
 // Aseprite
-// Copyright (C) 2019  Igara Studio S.A.
+// Copyright (C) 2019-2020  Igara Studio S.A.
 // Copyright (C) 2001-2018  David Capello
 //
 // This program is distributed under the terms of
@@ -19,8 +19,10 @@
 #include "app/ui/drop_down_button.h"
 #include "app/ui/editor/editor.h"
 #include "app/ui/font_popup.h"
+#include "app/ui/timeline/timeline.h"
 #include "app/util/freetype_utils.h"
 #include "base/bind.h"
+#include "base/clamp.h"
 #include "base/fs.h"
 #include "base/string.h"
 #include "doc/image.h"
@@ -79,7 +81,7 @@ public:
 
   int sizeValue() const {
     int size = fontSize()->textInt();
-    size = MID(1, size, 5000);
+    size = base::clamp(size, 1, 5000);
     return size;
   }
 
@@ -164,7 +166,7 @@ void PasteTextCommand::onExecute(Context* ctx)
   bool antialias = window.antialias()->isSelected();
   std::string faceName = window.faceValue();
   int size = window.sizeValue();
-  size = MID(1, size, 999);
+  size = base::clamp(size, 1, 999);
   pref.textTool.fontFace(faceName);
   pref.textTool.fontSize(size);
   pref.textTool.antialias(antialias);
@@ -189,6 +191,12 @@ void PasteTextCommand::onExecute(Context* ctx)
             rgbmap, sprite->palette(editor->frame()),
             false, 0));
       }
+
+      // TODO we don't support pasting text in multiple cels at the
+      //      moment, so we clear the range here (same as in
+      //      clipboard::paste())
+      if (auto timeline = App::instance()->timeline())
+        timeline->clearAndInvalidateRange();
 
       editor->pasteImage(image.get());
     }

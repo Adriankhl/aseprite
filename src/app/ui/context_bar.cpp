@@ -1,5 +1,5 @@
 // Aseprite
-// Copyright (C) 2018-2019  Igara Studio S.A.
+// Copyright (C) 2018-2020  Igara Studio S.A.
 // Copyright (C) 2001-2018  David Capello
 //
 // This program is distributed under the terms of
@@ -39,6 +39,7 @@
 #include "app/ui/color_button.h"
 #include "app/ui/color_shades.h"
 #include "app/ui/dithering_selector.h"
+#include "app/ui/dynamics_popup.h"
 #include "app/ui/editor/editor.h"
 #include "app/ui/icon_button.h"
 #include "app/ui/keyboard_shortcuts.h"
@@ -46,6 +47,7 @@
 #include "app/ui/skin/skin_theme.h"
 #include "app/ui_context.h"
 #include "base/bind.h"
+#include "base/clamp.h"
 #include "base/fs.h"
 #include "base/scoped_value.h"
 #include "doc/brush.h"
@@ -509,14 +511,18 @@ protected:
 };
 
 class ContextBar::InkShadesField : public HBox {
-
 public:
-  InkShadesField()
+  InkShadesField(ColorBar* colorBar)
     : m_button(SkinTheme::instance()->parts.iconArrowDown())
     , m_shade(Shade(), ColorShades::DragAndDropEntries)
     , m_loaded(false) {
     addChild(&m_button);
     addChild(&m_shade);
+
+    m_shade.setText("Select colors in the palette");
+    m_shade.setMinColors(2);
+    m_conn = colorBar->ChangeSelection.connect(
+      base::Bind<void>(&InkShadesField::onChangeColorBarSelection, this));
 
     m_button.setFocusStop(false);
     m_button.Click.connect(base::Bind<void>(&InkShadesField::onShowMenu, this));
@@ -545,7 +551,14 @@ public:
   }
 
   void updateShadeFromColorBarPicks() {
-    m_shade.updateShadeFromColorBarPicks();
+    auto colorBar = ColorBar::instance();
+    if (!colorBar)
+      return;
+
+    doc::PalettePicks picks;
+    colorBar->getPaletteView()->getSelectedEntries(picks);
+    if (picks.picks() >= 2)
+      onChangeColorBarSelection();
   }
 
 private:
@@ -584,7 +597,7 @@ private:
         auto shadeWidget = new ColorShades(shade, ColorShades::ClickWholeShade);
         shadeWidget->setExpansive(true);
         shadeWidget->Click.connect(
-          [&]{
+          [&](ColorShades::ClickEvent&){
             m_shade.setShade(shade);
           });
 
@@ -632,7 +645,7 @@ private:
 
     char buf[32];
     int n = get_config_int("shades", "count", 0);
-    n = MID(0, n, 256);
+    n = base::clamp(n, 0, 256);
     for (int i=0; i<n; ++i) {
       sprintf(buf, "shade%d", i);
       Shade shade = shade_from_string(get_config_string("shades", buf, ""));
@@ -654,10 +667,33 @@ private:
     }
   }
 
+  void onChangeColorBarSelection() {
+    if (!m_shade.isVisible())
+      return;
+
+    doc::PalettePicks picks;
+    ColorBar::instance()->getPaletteView()->getSelectedEntries(picks);
+
+    Shade newShade = m_shade.getShade();
+    newShade.resize(picks.picks());
+
+    int i = 0, j = 0;
+    for (bool pick : picks) {
+      if (pick)
+        newShade[j++] = app::Color::fromIndex(i);
+      ++i;
+    }
+
+    m_shade.setShade(newShade);
+
+    layout();
+  }
+
   IconButton m_button;
   ColorShades m_shade;
   std::vector<Shade> m_shades;
   bool m_loaded;
+  obs::scoped_connection m_conn;
 };
 
 class ContextBar::InkOpacityField : public IntEntry {
@@ -937,6 +973,56 @@ private:
   bool m_lockChange;
 };
 
+class ContextBar::DynamicsField : public ButtonSet
+                                , public DynamicsPopup::Delegate {
+public:
+  DynamicsField(ContextBar* ctxBar)
+    : ButtonSet(1)
+    , m_ctxBar(ctxBar) {
+    addItem(SkinTheme::instance()->parts.dynamics());
+  }
+
+  void showPopup() {
+    if (!m_popup) {
+      m_popup.reset(new DynamicsPopup(this));
+      m_popup->Close.connect([this](CloseEvent&){ deselectItems(); });
+    }
+
+    const gfx::Rect bounds = this->bounds();
+    m_popup->remapWindow();
+    m_popup->positionWindow(bounds.x, bounds.y+bounds.h);
+    m_popup->setHotRegion(gfx::Region(m_popup->bounds()));
+    m_popup->openWindow();
+  }
+
+  tools::DynamicsOptions getDynamics() {
+    if (m_popup)
+      return m_popup->getDynamics();
+    else
+      return tools::DynamicsOptions();
+  }
+
+private:
+  // DynamicsPopup::Delegate impl
+  doc::BrushRef getActiveBrush() override {
+    return m_ctxBar->activeBrush();
+  }
+
+  void onItemChange(Item* item) override {
+    ButtonSet::onItemChange(item);
+    showPopup();
+  }
+
+  void onInitTheme(InitThemeEvent& ev) override {
+    ButtonSet::onInitTheme(ev);
+    if (m_popup)
+      m_popup->initTheme();
+  }
+
+  std::unique_ptr<DynamicsPopup> m_popup;
+  ContextBar* m_ctxBar;
+};
+
 class ContextBar::FreehandAlgorithmField : public CheckBox {
 public:
   FreehandAlgorithmField() : CheckBox("Pixel-perfect") {
@@ -1099,7 +1185,14 @@ protected:
   void onClick(Event& ev) override {
     CheckBox::onClick(ev);
 
-    Preferences::instance().editor.autoSelectLayer(isSelected());
+    auto atm = App::instance()->activeToolManager();
+    if (atm->quickTool() &&
+        atm->quickTool()->getInk(0)->isCelMovement()) {
+      Preferences::instance().editor.autoSelectLayerQuick(isSelected());
+    }
+    else {
+      Preferences::instance().editor.autoSelectLayer(isSelected());
+    }
 
     releaseFocus();
   }
@@ -1415,7 +1508,8 @@ private:
   std::string m_filter;
 };
 
-ContextBar::ContextBar(TooltipManager* tooltipManager)
+ContextBar::ContextBar(TooltipManager* tooltipManager,
+                       ColorBar* colorBar)
 {
   addChild(m_selectionOptionsBox = new HBox());
   m_selectionOptionsBox->addChild(m_dropPixels = new DropPixelsField());
@@ -1443,7 +1537,7 @@ ContextBar::ContextBar(TooltipManager* tooltipManager)
   addChild(m_inkType = new InkTypeField(this));
   addChild(m_inkOpacityLabel = new Label("Opacity:"));
   addChild(m_inkOpacity = new InkOpacityField());
-  addChild(m_inkShades = new InkShadesField());
+  addChild(m_inkShades = new InkShadesField(colorBar));
 
   addChild(m_eyedropperField = new EyedropperField());
 
@@ -1457,6 +1551,7 @@ ContextBar::ContextBar(TooltipManager* tooltipManager)
   addChild(m_selectBoxHelp = new Label(""));
   addChild(m_freehandBox = new HBox());
 
+  m_freehandBox->addChild(m_dynamics = new DynamicsField(this));
   m_freehandBox->addChild(m_freehandAlgo = new FreehandAlgorithmField());
 
   addChild(m_symmetry = new SymmetryField());
@@ -1784,6 +1879,10 @@ void ContextBar::updateForTool(tools::Tool* tool)
     (tool->getInk(0)->withDitheringOptions() ||
      tool->getInk(1)->withDitheringOptions());
 
+  // True if the brush supports dynamics
+  // TODO add support for dynamics in custom brushes in the future
+  const bool supportDynamics = (!hasImageBrush);
+
   // Show/Hide fields
   m_zoomButtons->setVisible(needZoomButtons);
   m_brushBack->setVisible(supportOpacity && hasImageBrush && !withDithering);
@@ -1797,6 +1896,7 @@ void ContextBar::updateForTool(tools::Tool* tool)
   m_inkShades->setVisible(hasInkShades);
   m_eyedropperField->setVisible(isEyedropper);
   m_autoSelectLayer->setVisible(isMove);
+  m_dynamics->setVisible(isFreehand && supportDynamics);
   m_freehandBox->setVisible(isFreehand && supportOpacity);
   m_toleranceLabel->setVisible(hasTolerance);
   m_tolerance->setVisible(hasTolerance);
@@ -2105,6 +2205,11 @@ render::GradientType ContextBar::gradientType()
   return m_gradientType->gradientType();
 }
 
+tools::DynamicsOptions ContextBar::getDynamics()
+{
+  return m_dynamics->getDynamics();
+}
+
 void ContextBar::setupTooltips(TooltipManager* tooltipManager)
 {
   tooltipManager->addTooltipFor(m_brushBack->at(0), "Discard Brush (Esc)", BOTTOM);
@@ -2118,6 +2223,7 @@ void ContextBar::setupTooltips(TooltipManager* tooltipManager)
   tooltipManager->addTooltipFor(m_spraySpeed, "Spray Speed", BOTTOM);
   tooltipManager->addTooltipFor(m_pivot->at(0), "Rotation Pivot", BOTTOM);
   tooltipManager->addTooltipFor(m_rotAlgo, "Rotation Algorithm", BOTTOM);
+  tooltipManager->addTooltipFor(m_dynamics->at(0), "Dynamics", BOTTOM);
   tooltipManager->addTooltipFor(m_freehandAlgo,
                                 key_tooltip("Freehand trace algorithm",
                                             CommandId::PixelPerfectMode()), BOTTOM);
@@ -2141,11 +2247,24 @@ void ContextBar::registerCommands()
       new QuickCommand(
         CommandId::ShowBrushes(),
         [this]{ this->showBrushes(); }));
+
+  Commands::instance()
+    ->add(
+      new QuickCommand(
+        CommandId::ShowDynamics(),
+        [this]{ this->showDynamics(); }));
 }
 
 void ContextBar::showBrushes()
 {
-  m_brushType->showPopup();
+  if (m_brushType->isVisible())
+    m_brushType->showPopup();
+}
+
+void ContextBar::showDynamics()
+{
+  if (m_dynamics->isVisible())
+    m_dynamics->showPopup();
 }
 
 } // namespace app

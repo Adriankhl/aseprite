@@ -1,5 +1,5 @@
 // Aseprite
-// Copyright (C) 2018-2019  Igara Studio S.A.
+// Copyright (C) 2018-2020  Igara Studio S.A.
 // Copyright (C) 2001-2018  David Capello
 //
 // This program is distributed under the terms of
@@ -42,6 +42,7 @@
 #include "app/ui_context.h"
 #include "app/util/clipboard.h"
 #include "app/util/layer_boundaries.h"
+#include "app/util/layer_utils.h"
 #include "app/util/readable_time.h"
 #include "base/bind.h"
 #include "base/clamp.h"
@@ -56,6 +57,7 @@
 #include "os/system.h"
 #include "ui/ui.h"
 
+#include <algorithm>
 #include <cstdio>
 #include <vector>
 
@@ -283,7 +285,7 @@ Timeline::~Timeline()
 
 void Timeline::setZoom(const double zoom)
 {
-  m_zoom = MID(1.0, zoom, 10.0);
+  m_zoom = base::clamp(zoom, 1.0, 10.0);
   m_thumbnailsOverlayDirection = gfx::Point(int(frameBoxWidth()*1.0), int(frameBoxWidth()*0.5));
   m_thumbnailsOverlayVisible = false;
 }
@@ -943,7 +945,7 @@ bool Timeline::onProcessMessage(Message* msg)
               if (selectedLayersBounds(selectedLayers(),
                                        &layerFirst, &layerLast)) {
                 layer_t layerIdx = m_clk.layer;
-                layerIdx = MID(layerFirst, layerIdx, layerLast);
+                layerIdx = base::clamp(layerIdx, layerFirst, layerLast);
                 m_clk.layer = layerIdx;
               }
             }
@@ -997,7 +999,7 @@ bool Timeline::onProcessMessage(Message* msg)
             gfx::Rect onionRc = getOnionskinFramesBounds();
 
             int newValue = m_origFrames + (m_clk.frame - hit.frame);
-            docPref().onionskin.prevFrames(MAX(0, newValue));
+            docPref().onionskin.prevFrames(std::max(0, newValue));
 
             onionRc |= getOnionskinFramesBounds();
             invalidateRect(onionRc.offset(origin()));
@@ -1008,7 +1010,7 @@ bool Timeline::onProcessMessage(Message* msg)
             gfx::Rect onionRc = getOnionskinFramesBounds();
 
             int newValue = m_origFrames - (m_clk.frame - hit.frame);
-            docPref().onionskin.nextFrames(MAX(0, newValue));
+            docPref().onionskin.nextFrames(std::max(0, newValue));
 
             onionRc |= getOnionskinFramesBounds();
             invalidateRect(onionRc.offset(origin()));
@@ -1054,7 +1056,7 @@ bool Timeline::onProcessMessage(Message* msg)
         // we shouldn't change the hot (so the separator can be
         // tracked to the mouse's released).
         if (m_clk.part == PART_SEPARATOR) {
-          m_separator_x = MAX(0, mousePos.x);
+          m_separator_x = std::max(0, mousePos.x);
           layout();
           return true;
         }
@@ -1519,7 +1521,7 @@ void Timeline::onResize(ui::ResizeEvent& ev)
     gfx::Rect(
       rc.x,
       rc.y+(visibleTagBands()-1)*oneTagHeight(),
-      MIN(sz.w, m_separator_x),
+      std::min(sz.w, m_separator_x),
       oneTagHeight()));
 
   updateScrollBars();
@@ -1730,28 +1732,21 @@ void Timeline::onAddLayer(DocEvent& ev)
   invalidate();
 }
 
-// TODO similar to ActiveSiteHandler::onBeforeRemoveLayer()
+// TODO similar to ActiveSiteHandler::onBeforeRemoveLayer() and Editor::onBeforeRemoveLayer()
 void Timeline::onBeforeRemoveLayer(DocEvent& ev)
 {
-  Sprite* sprite = ev.sprite();
-  Layer* layer = ev.layer();
+  Layer* layerToSelect = candidate_if_layer_is_deleted(m_layer, ev.layer());
+  if (m_layer != layerToSelect)
+    setLayer(layerToSelect);
 
-  // If the layer that was removed is the selected one
-  if (layer == getLayer()) {
-    LayerGroup* parent = layer->parent();
-    Layer* layer_select = NULL;
+  // Remove layer from ranges
+  m_range.eraseAndAdjust(ev.layer());
+  m_startRange.eraseAndAdjust(ev.layer());
+  m_dropRange.eraseAndAdjust(ev.layer());
 
-    // Select previous layer, or next layer, or the parent (if it is
-    // not the main layer of sprite set).
-    if (layer->getPrevious())
-      layer_select = layer->getPrevious();
-    else if (layer->getNext())
-      layer_select = layer->getNext();
-    else if (parent != sprite->root())
-      layer_select = parent;
-
-    setLayer(layer_select);
-  }
+  ASSERT(!m_range.contains(ev.layer()));
+  ASSERT(!m_startRange.contains(ev.layer()));
+  ASSERT(!m_dropRange.contains(ev.layer()));
 }
 
 // We have to regenerate the layer rows (m_rows) after the layer is
@@ -1891,20 +1886,21 @@ void Timeline::setCursor(ui::Message* msg, const Hit& hit)
   }
 }
 
-void Timeline::getDrawableLayers(layer_t* firstLayer, layer_t* lastLayer)
+void Timeline::getDrawableLayers(layer_t* firstDrawableLayer,
+                                 layer_t* lastDrawableLayer)
 {
-  layer_t i = this->lastLayer()
+  layer_t i = lastLayer()
             - ((viewScroll().y + getCelsBounds().h) / layerBoxHeight());
-  i = MID(this->firstLayer(), i, this->lastLayer());
+  i = base::clamp(i, firstLayer(), lastLayer());
 
-  layer_t j = this->lastLayer() - viewScroll().y / layerBoxHeight();;
+  layer_t j = lastLayer() - viewScroll().y / layerBoxHeight();;
   if (!m_rows.empty())
-    j = MID(this->firstLayer(), j, this->lastLayer());
+    j = base::clamp(j, firstLayer(), lastLayer());
   else
     j = -1;
 
-  *firstLayer = i;
-  *lastLayer = j;
+  *firstDrawableLayer = i;
+  *lastDrawableLayer = j;
 }
 
 void Timeline::getDrawableFrames(frame_t* firstFrame, frame_t* lastFrame)
@@ -2482,9 +2478,9 @@ void Timeline::drawTags(ui::Graphics* g)
           r = gfx::getr(bg)+32;
           g = gfx::getg(bg)+32;
           b = gfx::getb(bg)+32;
-          r = MID(0, r, 255);
-          g = MID(0, g, 255);
-          b = MID(0, b, 255);
+          r = base::clamp(r, 0, 255);
+          g = base::clamp(g, 0, 255);
+          b = base::clamp(b, 0, 255);
           bg = gfx::rgba(r, g, b, gfx::geta(bg));
         }
         g->fillRect(bg, bounds);
@@ -2712,7 +2708,7 @@ gfx::Rect Timeline::getPartBounds(const Hit& hit) const
     case PART_HEADER_FRAME:
       return gfx::Rect(
         bounds.x + m_separator_x + m_separator_w - 1
-        + frameBoxWidth()*MAX(firstFrame(), hit.frame) - viewScroll().x,
+        + frameBoxWidth()*std::max(firstFrame(), hit.frame) - viewScroll().x,
         bounds.y + y, frameBoxWidth(), headerBoxHeight());
 
     case PART_ROW:
@@ -2811,7 +2807,7 @@ gfx::Rect Timeline::getPartBounds(const Hit& hit) const
       return gfx::Rect(
         bounds.x + m_separator_x + m_separator_w - 1,
         bounds.y
-        + (m_tagFocusBand < 0 ? oneTagHeight() * MAX(0, hit.band): 0),
+        + (m_tagFocusBand < 0 ? oneTagHeight() * std::max(0, hit.band): 0),
         bounds.w - m_separator_x - m_separator_w + 1,
         oneTagHeight());
 
@@ -2832,7 +2828,7 @@ gfx::Rect Timeline::getPartBounds(const Hit& hit) const
       return gfx::Rect(
         bounds.x + bounds.w - sz.w - 2*ui::guiscale(),
         bounds.y
-        + (m_tagFocusBand < 0 ? oneTagHeight() * MAX(0, hit.band): 0)
+        + (m_tagFocusBand < 0 ? oneTagHeight() * std::max(0, hit.band): 0)
         + oneTagHeight()/2 - sz.h/2,
         sz.w, sz.h);
     }
@@ -2991,7 +2987,7 @@ void Timeline::regenerateTagBands()
   const int oldVisibleBands = visibleTagBands();
   m_tagBands = 0;
   for (int i : tagsPerFrame)
-    m_tagBands = MAX(m_tagBands, i);
+    m_tagBands = std::max(m_tagBands, i);
 
   if (m_tagFocusBand >= m_tagBands)
     m_tagFocusBand = -1;
@@ -3055,11 +3051,11 @@ Timeline::Hit Timeline::hitTest(ui::Message* msg, const gfx::Point& mousePos)
       hit.veryBottom = true;
 
     if (hasCapture()) {
-      hit.layer = MID(firstLayer(), hit.layer, lastLayer());
+      hit.layer = base::clamp(hit.layer, firstLayer(), lastLayer());
       if (isMovingCel())
-        hit.frame = MAX(firstFrame(), hit.frame);
+        hit.frame = std::max(firstFrame(), hit.frame);
       else
-        hit.frame = MID(firstFrame(), hit.frame, lastFrame());
+        hit.frame = base::clamp(hit.frame, firstFrame(), lastFrame());
     }
     else {
       if (hit.layer > lastLayer()) hit.layer = -1;
@@ -3233,8 +3229,8 @@ Timeline::Hit Timeline::hitTestCel(const gfx::Point& mousePos)
                        - m_separator_w
                        + scroll.x) / frameBoxWidth());
 
-  hit.layer = MID(firstLayer(), hit.layer, lastLayer());
-  hit.frame = MAX(firstFrame(), hit.frame);
+  hit.layer = base::clamp(hit.layer, firstLayer(), lastLayer());
+  hit.frame = std::max(firstFrame(), hit.frame);
 
   return hit;
 }
@@ -3545,8 +3541,8 @@ gfx::Point Timeline::getMaxScrollablePos() const
     gfx::Size size = getScrollableSize();
     int max_scroll_x = size.w - getCelsBounds().w + 1*guiscale();
     int max_scroll_y = size.h - getCelsBounds().h + 1*guiscale();
-    max_scroll_x = MAX(0, max_scroll_x);
-    max_scroll_y = MAX(0, max_scroll_y);
+    max_scroll_x = std::max(0, max_scroll_x);
+    max_scroll_y = std::max(0, max_scroll_y);
     return gfx::Point(max_scroll_x, max_scroll_y);
   }
   else
@@ -3742,8 +3738,8 @@ void Timeline::setViewScroll(const gfx::Point& pt)
   const gfx::Point oldScroll = viewScroll();
   const gfx::Point maxPos = getMaxScrollablePos();
   gfx::Point newScroll = pt;
-  newScroll.x = MID(0, newScroll.x, maxPos.x);
-  newScroll.y = MID(0, newScroll.y, maxPos.y);
+  newScroll.x = base::clamp(newScroll.x, 0, maxPos.x);
+  newScroll.y = base::clamp(newScroll.y, 0, maxPos.y);
 
   if (newScroll.y != oldScroll.y) {
     gfx::Rect rc;
@@ -3932,9 +3928,9 @@ double Timeline::zoom() const
 int Timeline::calcTagVisibleToFrame(Tag* tag) const
 {
   return
-    MAX(tag->toFrame(),
-        tag->fromFrame() +
-        font()->textLength(tag->name())/frameBoxWidth());
+    std::max(tag->toFrame(),
+             tag->fromFrame() +
+             font()->textLength(tag->name())/frameBoxWidth());
 }
 
 int Timeline::topHeight() const

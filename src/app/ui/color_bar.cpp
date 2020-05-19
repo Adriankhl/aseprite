@@ -1,5 +1,5 @@
 // Aseprite
-// Copyright (C) 2018-2019  Igara Studio S.A.
+// Copyright (C) 2018-2020  Igara Studio S.A.
 // Copyright (C) 2001-2018  David Capello
 //
 // This program is distributed under the terms of
@@ -27,8 +27,8 @@
 #include "app/commands/quick_command.h"
 #include "app/console.h"
 #include "app/context_access.h"
-#include "app/doc_undo.h"
 #include "app/doc_api.h"
+#include "app/doc_undo.h"
 #include "app/i18n/strings.h"
 #include "app/ini_file.h"
 #include "app/modules/editors.h"
@@ -51,6 +51,7 @@
 #include "app/ui_context.h"
 #include "app/util/clipboard.h"
 #include "base/bind.h"
+#include "base/clamp.h"
 #include "base/scoped_value.h"
 #include "doc/cel.h"
 #include "doc/cels_range.h"
@@ -145,7 +146,7 @@ ColorBar::ColorBar(int align, TooltipManager* tooltipManager)
   , m_fromBgButton(false)
   , m_lastDocument(nullptr)
   , m_ascending(true)
-  , m_lastButtons(kButtonLeft)
+  , m_lastButton(kButtonLeft)
   , m_editMode(false)
   , m_redrawTimer(250, this)
   , m_redrawAll(false)
@@ -515,7 +516,7 @@ void ColorBar::onRemapButtonClick()
   // Create remap from m_oldPalette to the current palette
   Remap remap(1);
   try {
-    ContextWriter writer(UIContext::instance(), 500);
+    ContextWriter writer(UIContext::instance());
     Sprite* sprite = writer.sprite();
     ASSERT(sprite);
     if (!sprite)
@@ -536,7 +537,7 @@ void ColorBar::onRemapButtonClick()
   }
 
   try {
-    ContextWriter writer(UIContext::instance(), 500);
+    ContextWriter writer(UIContext::instance());
     Sprite* sprite = writer.sprite();
     if (sprite) {
       ASSERT(sprite->pixelFormat() == IMAGE_INDEXED);
@@ -585,7 +586,7 @@ void ColorBar::onRemapButtonClick()
   }
 }
 
-void ColorBar::onPaletteViewIndexChange(int index, ui::MouseButtons buttons)
+void ColorBar::onPaletteViewIndexChange(int index, ui::MouseButton button)
 {
   COLOR_BAR_TRACE("ColorBar::onPaletteViewIndexChange(%d)\n", index);
 
@@ -593,11 +594,11 @@ void ColorBar::onPaletteViewIndexChange(int index, ui::MouseButtons buttons)
 
   app::Color color = app::Color::fromIndex(index);
 
-  if ((buttons & kButtonRight) == kButtonRight)
+  if (button == kButtonRight)
     setBgColor(color);
-  else if ((buttons & kButtonLeft) == kButtonLeft)
+  else if (button == kButtonLeft)
     setFgColor(color);
-  else if ((buttons & kButtonMiddle) == kButtonMiddle)
+  else if (button == kButtonMiddle)
     setTransparentIndex(index);
 
   ChangeSelection();
@@ -620,7 +621,7 @@ void ColorBar::setPalette(const doc::Palette* newPalette, const std::string& act
   showRemap();
 
   try {
-    ContextWriter writer(UIContext::instance(), 500);
+    ContextWriter writer(UIContext::instance());
     Sprite* sprite = writer.sprite();
     frame_t frame = writer.frame();
     if (sprite &&
@@ -638,7 +639,7 @@ void ColorBar::setPalette(const doc::Palette* newPalette, const std::string& act
 void ColorBar::setTransparentIndex(int index)
 {
   try {
-    ContextWriter writer(UIContext::instance(), 500);
+    ContextWriter writer(UIContext::instance());
     Sprite* sprite = writer.sprite();
     if (sprite &&
         sprite->pixelFormat() == IMAGE_INDEXED &&
@@ -837,17 +838,17 @@ void ColorBar::onColorButtonChange(const app::Color& color)
     m_wheel->selectColor(color);
 }
 
-void ColorBar::onPickSpectrum(const app::Color& color, ui::MouseButtons buttons)
+void ColorBar::onPickSpectrum(const app::Color& color, ui::MouseButton button)
 {
-  if (buttons == kButtonNone)
-    buttons = m_lastButtons;
+  if (button == kButtonNone)
+    button = m_lastButton;
 
-  if ((buttons & kButtonRight) == kButtonRight)
+  if (button == kButtonRight)
     setBgColor(color);
-  else if ((buttons & kButtonLeft) == kButtonLeft)
+  else if (button == kButtonLeft)
     setFgColor(color);
 
-  m_lastButtons = buttons;
+  m_lastButton = button;
 }
 
 void ColorBar::onReverseColors()
@@ -1068,7 +1069,7 @@ void ColorBar::onTimerTick()
 
     // Redraw all editors
     try {
-      ContextWriter writer(UIContext::instance(), 500);
+      ContextWriter writer(UIContext::instance());
       Doc* document(writer.document());
       if (document != NULL)
         document->notifyGeneralUpdate();
@@ -1080,8 +1081,8 @@ void ColorBar::onTimerTick()
   // Redraw just the current editor
   else {
     m_redrawAll = true;
-    if (current_editor != NULL)
-      current_editor->updateEditor();
+    if (current_editor)
+      current_editor->updateEditor(true);
   }
 }
 
@@ -1150,7 +1151,7 @@ void ColorBar::updateCurrentSpritePalette(const char* operationName)
   if (UIContext::instance()->activeDocument() &&
       UIContext::instance()->activeDocument()->sprite()) {
     try {
-      ContextWriter writer(UIContext::instance(), 500);
+      ContextWriter writer(UIContext::instance());
       Doc* document(writer.document());
       Sprite* sprite(writer.sprite());
       Palette* newPalette = get_current_palette(); // System current pal
@@ -1216,7 +1217,7 @@ void ColorBar::fixColorIndex(ColorButton& colorButton)
 
   if (color.getType() == Color::IndexType) {
     int oldIndex = color.getIndex();
-    int newIndex = MID(0, oldIndex, get_current_palette()->size()-1);
+    int newIndex = base::clamp(oldIndex, 0, get_current_palette()->size()-1);
     if (oldIndex != newIndex) {
       color = Color::fromIndex(newIndex);
       colorButton.setColor(color);

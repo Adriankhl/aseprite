@@ -1,5 +1,5 @@
 // Aseprite
-// Copyright (C) 2019 Igara Studio S.A.
+// Copyright (C) 2019-2020  Igara Studio S.A.
 // Copyright (C) 2001-2018  David Capello
 //
 // This program is distributed under the terms of
@@ -42,7 +42,7 @@ protected:
   void onExecute(Context* context) override;
 
   // SelectBoxDelegate impl
-  void onQuickboxEnd(Editor* editor, const gfx::Rect& rect, ui::MouseButtons buttons) override;
+  void onQuickboxEnd(Editor* editor, const gfx::Rect& rect, ui::MouseButton button) override;
   void onQuickboxCancel(Editor* editor) override;
 
   std::string onGetContextBarHelp() override {
@@ -101,7 +101,7 @@ void NewBrushCommand::onExecute(Context* context)
   }
 }
 
-void NewBrushCommand::onQuickboxEnd(Editor* editor, const gfx::Rect& rect, ui::MouseButtons buttons)
+void NewBrushCommand::onQuickboxEnd(Editor* editor, const gfx::Rect& rect, ui::MouseButton button)
 {
   Mask mask;
   mask.replace(rect);
@@ -109,9 +109,9 @@ void NewBrushCommand::onQuickboxEnd(Editor* editor, const gfx::Rect& rect, ui::M
   selectPencilTool();
 
   // If the right-button was used, we clear the selected area.
-  if (buttons & ui::kButtonRight) {
+  if (button == ui::kButtonRight) {
     try {
-      ContextWriter writer(UIContext::instance(), 250);
+      ContextWriter writer(UIContext::instance());
       if (writer.cel()) {
         gfx::Rect canvasRect = (rect & writer.cel()->bounds());
         if (!canvasRect.isEmpty()) {

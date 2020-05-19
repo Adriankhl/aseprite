@@ -1,5 +1,5 @@
 // Aseprite
-// Copyright (C) 2018-2019  Igara Studio S.A.
+// Copyright (C) 2018-2020  Igara Studio S.A.
 // Copyright (C) 2015-2018  David Capello
 //
 // This program is distributed under the terms of
@@ -75,16 +75,39 @@ struct ImageObj {
   }
 };
 
+void render_sprite(Image* dst,
+                   const Sprite* sprite,
+                   const frame_t frame,
+                   const int x, const int y)
+{
+  render::Render render;
+  render.setNewBlend(true);
+  render.renderSprite(
+    dst, sprite, frame,
+    gfx::Clip(x, y,
+              0, 0,
+              sprite->width(),
+              sprite->height()));
+}
+
 int Image_clone(lua_State* L);
 
 int Image_new(lua_State* L)
 {
+  doc::Image* image = nullptr;
   doc::ImageSpec spec(doc::ColorMode::RGB, 1, 1, 0);
   if (auto spec2 = may_get_obj<doc::ImageSpec>(L, 1)) {
     spec = *spec2;
   }
   else if (may_get_obj<ImageObj>(L, 1)) {
     return Image_clone(L);
+  }
+  else if (auto spr = may_get_docobj<doc::Sprite>(L, 1)) {
+    image = doc::Image::create(spr->spec());
+    if (!image)
+      return 0;
+
+    render_sprite(image, spr, 0, 0, 0);
   }
   else if (lua_istable(L, 1)) {
     // Image{ fromFile }
@@ -124,8 +147,16 @@ int Image_new(lua_State* L)
     spec.setHeight(h);
     spec.setColorMode((doc::ColorMode)colorMode);
   }
-  doc::Image* image = doc::Image::create(spec);
-  doc::clear_image(image, spec.maskColor());
+  if (!image) {
+    if (spec.width() < 1) spec.setWidth(1);
+    if (spec.height() < 1) spec.setHeight(1);
+    image = doc::Image::create(spec);
+    if (!image) {
+      // Invalid spec (e.g. width=0, height=0, etc.)
+      return 0;
+    }
+    doc::clear_image(image, spec.maskColor());
+  }
   push_new<ImageObj>(L, image);
   return 1;
 }
@@ -164,7 +195,7 @@ int Image_clear(lua_State* L)
   else if (lua_isinteger(L, 2))
     color = lua_tointeger(L, 2);
   else
-    color = convert_args_into_pixel_color(L, 2);
+    color = convert_args_into_pixel_color(L, 2, img->pixelFormat());
   doc::clear_image(img, color);
   return 0;
 }
@@ -172,14 +203,15 @@ int Image_clear(lua_State* L)
 int Image_drawPixel(lua_State* L)
 {
   auto obj = get_obj<ImageObj>(L, 1);
+  auto img = obj->image(L);
   const int x = lua_tointeger(L, 2);
   const int y = lua_tointeger(L, 3);
   doc::color_t color;
   if (lua_isinteger(L, 4))
     color = lua_tointeger(L, 4);
   else
-    color = convert_args_into_pixel_color(L, 4);
-  doc::put_pixel(obj->image(L), x, y, color);
+    color = convert_args_into_pixel_color(L, 4, img->pixelFormat());
+  doc::put_pixel(img, x, y, color);
   return 0;
 }
 
@@ -224,27 +256,13 @@ int Image_drawSprite(lua_State* L)
   // If the destination image is not related to a sprite, we just draw
   // the source image without undo information.
   if (obj->cel(L) == nullptr) {
-    render::Render render;
-    render.setNewBlend(true);
-    render.renderSprite(
-      dst, sprite, frame,
-      gfx::Clip(pos.x, pos.y,
-                0, 0,
-                sprite->width(),
-                sprite->height()));
+    render_sprite(dst, sprite, frame, pos.x, pos.y);
   }
   else {
     Tx tx;
 
     ImageRef tmp(Image::createCopy(dst));
-    render::Render render;
-    render.setNewBlend(true);
-    render.renderSprite(
-      tmp.get(), sprite, frame,
-      gfx::Clip(pos.x, pos.y,
-                0, 0,
-                sprite->width(),
-                sprite->height()));
+    render_sprite(tmp.get(), sprite, frame, pos.x, pos.y);
 
     int x1, y1, x2, y2;
     if (get_shrink_rect2(&x1, &y1, &x2, &y2, dst, tmp.get())) {
@@ -304,7 +322,7 @@ int Image_isPlain(lua_State* L)
   else if (lua_isinteger(L, 2))
     color = lua_tointeger(L, 2);
   else
-    color = convert_args_into_pixel_color(L, 2);
+    color = convert_args_into_pixel_color(L, 2, img->pixelFormat());
 
   bool res = doc::is_plain_image(img, color);
   lua_pushboolean(L, res);
@@ -314,30 +332,62 @@ int Image_isPlain(lua_State* L)
 int Image_saveAs(lua_State* L)
 {
   auto obj = get_obj<ImageObj>(L, 1);
-  auto img = obj->image(L);
-  const char* fn = luaL_checkstring(L, 2);
+  Image* img = obj->image(L);
+  Cel* cel = obj->cel(L);
+  Palette* pal = (cel ? cel->sprite()->palette(cel->frame()): nullptr);
+  std::string fn;
   bool result = false;
-  if (fn) {
-    std::string absFn = base::get_absolute_path(fn);
-    if (!ask_access(L, absFn.c_str(), FileAccessMode::Write, true))
-      return luaL_error(L, "script doesn't have access to write file %s",
-                        absFn.c_str());
 
-    std::unique_ptr<Sprite> sprite(Sprite::MakeStdSprite(img->spec(), 256));
+  if (lua_istable(L, 2)) {
+    // Image:saveAs{ filename }
+    int type = lua_getfield(L, 2, "filename");
+    if (type != LUA_TNIL) {
+      if (const char* fn0 = lua_tostring(L, -1))
+        fn = fn0;
+    }
+    lua_pop(L, 1);
 
-    std::vector<Image*> oneImage;
-    sprite->getImages(oneImage);
-    ASSERT(oneImage.size() == 1);
-    if (!oneImage.empty())
-      copy_image(oneImage.front(), img);
-
-    std::unique_ptr<Doc> doc(new Doc(sprite.get()));
-    sprite.release();
-    doc->setFilename(absFn);
-
-    app::Context* ctx = App::instance()->context();
-    result = (save_document(ctx, doc.get()) >= 0);
+    // Image:saveAs{ palette }
+    lua_getfield(L, 2, "palette");
+    if (type != LUA_TNIL) {
+      if (auto pal0 = get_palette_from_arg(L, -1))
+        pal = pal0;
+    }
+    lua_pop(L, 1);
   }
+  else {
+    // Image:saveAs(filename)
+    const char* fn0 = luaL_checkstring(L, 2);
+    if (fn0)
+      fn = fn0;
+  }
+
+  if (fn.empty())
+    return luaL_error(L, "missing filename in Image:saveAs()");
+
+  std::string absFn = base::get_absolute_path(fn);
+  if (!ask_access(L, absFn.c_str(), FileAccessMode::Write, true))
+    return luaL_error(L, "script doesn't have access to write file %s",
+                      absFn.c_str());
+
+  std::unique_ptr<Sprite> sprite(Sprite::MakeStdSprite(img->spec(), 256));
+
+  std::vector<Image*> oneImage;
+  sprite->getImages(oneImage);
+  ASSERT(oneImage.size() == 1);
+  if (!oneImage.empty())
+    copy_image(oneImage.front(), img);
+
+  if (pal)
+    sprite->setPalette(pal, false);
+
+  std::unique_ptr<Doc> doc(new Doc(sprite.get()));
+  sprite.release();
+  doc->setFilename(absFn);
+
+  app::Context* ctx = App::instance()->context();
+  result = (save_document(ctx, doc.get()) >= 0);
+
   lua_pushboolean(L, result);
   return 1;
 }
